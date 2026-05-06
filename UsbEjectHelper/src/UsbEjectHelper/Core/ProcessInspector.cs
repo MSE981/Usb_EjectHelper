@@ -33,9 +33,10 @@ public class ProcessInfo
 /// <summary>
 /// 进程检查器 —— 查询进程元数据、识别系统关键进程。
 /// </summary>
-public class ProcessInspector
+public class ProcessInspector : IDisposable
 {
     private readonly ILogger<ProcessInspector> _logger;
+    private readonly ILoggerFactory? _ownedFactory;
 
     /// <summary>
     /// 系统关键进程名单（不分大小写）。
@@ -60,7 +61,15 @@ public class ProcessInspector
 
     public ProcessInspector(ILogger<ProcessInspector>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<ProcessInspector>();
+        if (logger == null)
+        {
+            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
+            _logger = _ownedFactory.CreateLogger<ProcessInspector>();
+        }
+        else
+        {
+            _logger = logger;
+        }
     }
 
     /// <summary>
@@ -160,5 +169,11 @@ public class ProcessInspector
             CommandLine = cmdLine,
             IsCriticalProcess = isCritical
         };
+    }
+
+    public void Dispose()
+    {
+        _ownedFactory?.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

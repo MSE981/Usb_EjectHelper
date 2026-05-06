@@ -6,9 +6,10 @@ namespace UsbEjectHelper.Core;
 /// <summary>
 /// 卷路径解析器 —— 盘符、卷 GUID、NT 设备路径之间的映射与规范化。
 /// </summary>
-public class VolumeResolver
+public class VolumeResolver : IDisposable
 {
     private readonly ILogger<VolumeResolver> _logger;
+    private readonly ILoggerFactory? _ownedFactory;
 
     /// <summary>NT 设备名 → 盘符 缓存，如 "\Device\HarddiskVolume5" → "E:"</summary>
     private readonly Dictionary<string, string> _deviceToDriveMap = new(StringComparer.OrdinalIgnoreCase);
@@ -24,7 +25,15 @@ public class VolumeResolver
 
     public VolumeResolver(ILogger<VolumeResolver>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<VolumeResolver>();
+        if (logger == null)
+        {
+            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
+            _logger = _ownedFactory.CreateLogger<VolumeResolver>();
+        }
+        else
+        {
+            _logger = logger;
+        }
         BuildMappings();
     }
 
@@ -214,5 +223,11 @@ public class VolumeResolver
         }
         catch (Exception) { }
         return string.Empty;
+    }
+
+    public void Dispose()
+    {
+        _ownedFactory?.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

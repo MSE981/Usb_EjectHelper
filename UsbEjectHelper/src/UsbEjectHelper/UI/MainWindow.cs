@@ -541,6 +541,9 @@ public class MainWindow : Form
         if (disposing)
         {
             _deviceWatcher?.Dispose();
+            _handleScanner?.Dispose();
+            _ejectService?.Dispose();
+            _volumeResolver?.Dispose();
         }
         base.Dispose(disposing);
     }

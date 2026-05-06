@@ -25,13 +25,22 @@ public enum EjectResult
 /// <summary>
 /// 安全弹出服务 —— 调用 Windows API 尝试弹出可移动设备，失败时返回结构化原因。
 /// </summary>
-public class EjectService
+public class EjectService : IDisposable
 {
     private readonly ILogger<EjectService> _logger;
+    private readonly ILoggerFactory? _ownedFactory;
 
     public EjectService(ILogger<EjectService>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<EjectService>();
+        if (logger == null)
+        {
+            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
+            _logger = _ownedFactory.CreateLogger<EjectService>();
+        }
+        else
+        {
+            _logger = logger;
+        }
     }
 
     /// <summary>
@@ -92,6 +101,10 @@ public class EjectService
     /// </summary>
     private EjectResult EjectViaShell(string driveLetter)
     {
+        object? shell = null;
+        object? drivesFolder = null;
+        object? driveItem = null;
+        object? verbs = null;
         try
         {
             Type? shellType = Type.GetTypeFromProgID("Shell.Application");
@@ -101,9 +114,12 @@ public class EjectService
                 return EjectResult.ApiFailure;
             }
 
-            dynamic shell = Activator.CreateInstance(shellType)!;
-            dynamic drivesFolder = shell.Namespace(17);
-            dynamic? driveItem = drivesFolder.ParseName(driveLetter);
+            shell = Activator.CreateInstance(shellType)!;
+            // Namespace(17) = ssfDRIVES
+            drivesFolder = shellType.InvokeMember("Namespace", System.Reflection.BindingFlags.InvokeMethod,
+                null, shell, new object[] { 17 })!;
+            driveItem = drivesFolder.GetType().InvokeMember("ParseName", System.Reflection.BindingFlags.InvokeMethod,
+                null, drivesFolder, new object[] { driveLetter });
 
             if (driveItem == null)
             {
@@ -112,18 +128,32 @@ public class EjectService
             }
 
             // 遍历可用动词，查找"弹出"或"Eject"
-            dynamic verbs = driveItem.Verbs();
+            verbs = driveItem.GetType().InvokeMember("Verbs", System.Reflection.BindingFlags.InvokeMethod,
+                null, driveItem, null)!;
+            var verbCollection = (System.Collections.IEnumerable)verbs;
             bool foundEject = false;
-            foreach (dynamic verb in verbs)
+
+            foreach (object? verb in verbCollection)
             {
-                string verbName = verb.Name;
-                if (verbName.Contains("弹出") || verbName.Equals("E&ject", StringComparison.OrdinalIgnoreCase) ||
-                    verbName.Equals("Eject", StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    verb.DoIt();
-                    foundEject = true;
-                    _logger.LogInformation("Shell 执行动词成功: {Verb}", verbName);
-                    break;
+                    if (verb == null) continue;
+                    string verbName = verb.GetType().InvokeMember("Name",
+                        System.Reflection.BindingFlags.GetProperty, null, verb, null) as string ?? "";
+
+                    if (verbName.Contains("弹出") || verbName.Equals("E&ject", StringComparison.OrdinalIgnoreCase) ||
+                        verbName.Equals("Eject", StringComparison.OrdinalIgnoreCase))
+                    {
+                        verb.GetType().InvokeMember("DoIt", System.Reflection.BindingFlags.InvokeMethod,
+                            null, verb, null);
+                        foundEject = true;
+                        _logger.LogInformation("Shell 执行动词成功: {Verb}", verbName);
+                        break;
+                    }
+                }
+                finally
+                {
+                    if (verb != null) Marshal.ReleaseComObject(verb);
                 }
             }
 
@@ -134,7 +164,6 @@ public class EjectService
             }
 
             // ⚠ Shell.InvokeVerb 不会在失败时抛异常，必须验证设备是否真的消失
-            // 等待最多 3 秒，轮询检查盘符是否已从系统中移除
             var maxWait = TimeSpan.FromSeconds(3);
             var interval = TimeSpan.FromMilliseconds(200);
             var deadline = DateTime.UtcNow + maxWait;
@@ -149,7 +178,6 @@ public class EjectService
                 Thread.Sleep(interval);
             }
 
-            // 超时：盘符仍然存在，弹出失败
             _logger.LogWarning("{Drive} 弹出后盘符仍然存在，实际弹出失败。", driveLetter);
             return EjectResult.DeviceBusy;
         }
@@ -162,6 +190,14 @@ public class EjectService
         {
             _logger.LogWarning(ex, "Shell 弹出异常: {Drive}", driveLetter);
             return EjectResult.ApiFailure;
+        }
+        finally
+        {
+            // 严格按创建逆序释放 COM 对象
+            if (verbs != null) Marshal.ReleaseComObject(verbs);
+            if (driveItem != null) Marshal.ReleaseComObject(driveItem);
+            if (drivesFolder != null) Marshal.ReleaseComObject(drivesFolder);
+            if (shell != null) Marshal.ReleaseComObject(shell);
         }
     }
 
@@ -183,6 +219,12 @@ public class EjectService
         {
             return false; // 异常时视为已移除
         }
+    }
+
+    public void Dispose()
+    {
+        _ownedFactory?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>

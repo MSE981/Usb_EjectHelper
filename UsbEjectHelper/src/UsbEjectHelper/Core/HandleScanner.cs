@@ -64,15 +64,24 @@ public class ScanSummary
 /// <summary>
 /// 占用句柄扫描器 —— MVP 使用 Restart Manager API 查询占用目标卷的进程。
 /// </summary>
-public class HandleScanner
+public class HandleScanner : IDisposable
 {
     private readonly ILogger<HandleScanner> _logger;
+    private readonly ILoggerFactory? _ownedFactory;
     private readonly VolumeResolver _volumeResolver;
     private readonly ProcessInspector _processInspector;
 
     public HandleScanner(VolumeResolver? volumeResolver = null, ProcessInspector? processInspector = null, ILogger<HandleScanner>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<HandleScanner>();
+        if (logger == null)
+        {
+            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
+            _logger = _ownedFactory.CreateLogger<HandleScanner>();
+        }
+        else
+        {
+            _logger = logger;
+        }
         _volumeResolver = volumeResolver ?? new VolumeResolver();
         _processInspector = processInspector ?? new ProcessInspector();
     }
@@ -266,6 +275,12 @@ public class HandleScanner
         });
 
         return results;
+    }
+
+    public void Dispose()
+    {
+        _ownedFactory?.Dispose();
+        GC.SuppressFinalize(this);
     }
 }
 

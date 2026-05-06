@@ -19,6 +19,7 @@ public class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _exitMenuItem;
     private MainWindow? _mainWindow;
     private CancellationTokenSource? _pipeCts;
+    private bool _isExiting;
 
     public TrayApplication()
     {
@@ -106,11 +107,17 @@ public class TrayApplication : ApplicationContext
     /// </summary>
     public void ExitApplication()
     {
+        if (_isExiting) return; // 防止递归
+        _isExiting = true;
+
         _logger.LogInformation("正在退出…");
         _pipeCts?.Cancel();
         _pipeCts?.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _mainWindow?.Close();
+        _mainWindow?.Dispose();
+        _mainWindow = null;
         Application.Exit();
     }
 
