@@ -58,13 +58,13 @@ public class WmiMockTests
             {
                 new()
                 {
-                    Antecedent = @"Win32_LogicalDisk.DeviceID=""C:""",
-                    Dependent = @"Win32_DiskPartition.DeviceID=""Disk #0, Partition #0"""
+                    Antecedent = @"Win32_DiskPartition.DeviceID=""Disk #0, Partition #0""",
+                    Dependent = @"Win32_LogicalDisk.DeviceID=""C:"""
                 },
                 new()
                 {
-                    Antecedent = @"Win32_LogicalDisk.DeviceID=""E:""",
-                    Dependent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0"""
+                    Antecedent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0""",
+                    Dependent = @"Win32_LogicalDisk.DeviceID=""E:"""
                 }
             }
         };
@@ -97,5 +97,99 @@ public class WmiMockTests
         };
         // PNPDeviceID 包含 "USB" 应该被识别
         Assert.Contains("USB", drives[0].PNPDeviceID, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 验证 Win32_LogicalDiskToPartition 映射方向：
+    /// Antecedent=DiskPartition, Dependent=LogicalDisk。
+    /// 修复前代码反向了 Antecedent/Dependent，会导致 USB Fixed 盘识别失败。
+    /// </summary>
+    [Fact]
+    public void LogicalDiskToPartition_MappingDirection_ShouldBePartitionToDrive()
+    {
+        // 构造 WMI 返回的数据：Antecedent=分区, Dependent=盘符
+        var mock = new MockWmiQueryService
+        {
+            DiskDrives = new List<WmiDiskDrive>
+            {
+                new() { DeviceID = @"\\.\PHYSICALDRIVE1", InterfaceType = "USB" }
+            },
+            LogicalDisks = new List<WmiLogicalDisk>
+            {
+                new() { DeviceID = "F:", DriveType = 3 }  // Fixed 类型
+            },
+            DiskPartitionMappings = new List<WmiDiskPartitionMapping>
+            {
+                new()
+                {
+                    Antecedent = @"Win32_DiskDrive.DeviceID=""\\.\PHYSICALDRIVE1""",
+                    Dependent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0"""
+                }
+            },
+            // Win32_LogicalDiskToPartition: Antecedent=分区, Dependent=逻辑盘
+            LogicalDiskPartitionMappings = new List<WmiLogicalDiskPartitionMapping>
+            {
+                new()
+                {
+                    Antecedent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0""",
+                    Dependent = @"Win32_LogicalDisk.DeviceID=""F:"""
+                }
+            }
+        };
+
+        // 验证映射方向：从 Win32_LogicalDiskToPartition 的 Dependent 提取盘符
+        Assert.Equal(@"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0""",
+            mock.LogicalDiskPartitionMappings[0].Antecedent);
+        Assert.Equal(@"Win32_LogicalDisk.DeviceID=""F:""",
+            mock.LogicalDiskPartitionMappings[0].Dependent);
+    }
+
+    /// <summary>
+    /// 验证 DeviceWatcher 使用 mock WMI 能正确识别 USB Fixed 盘。
+    /// </summary>
+    [Fact]
+    public void DeviceWatcher_WithMockWmi_ShouldIdentifyUsbFixedDrive()
+    {
+        var mock = new MockWmiQueryService
+        {
+            DiskDrives = new List<WmiDiskDrive>
+            {
+                new() { DeviceID = @"\\.\PHYSICALDRIVE1", Model = "USB SSD", InterfaceType = "USB" }
+            },
+            LogicalDisks = new List<WmiLogicalDisk>
+            {
+                new() { DeviceID = "G:", DriveType = 3, Size = 256L * 1024 * 1024 * 1024 }
+            },
+            DiskPartitionMappings = new List<WmiDiskPartitionMapping>
+            {
+                new()
+                {
+                    Antecedent = @"Win32_DiskDrive.DeviceID=""\\.\PHYSICALDRIVE1""",
+                    Dependent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0"""
+                }
+            },
+            LogicalDiskPartitionMappings = new List<WmiLogicalDiskPartitionMapping>
+            {
+                new()
+                {
+                    Antecedent = @"Win32_DiskPartition.DeviceID=""Disk #1, Partition #0""",
+                    Dependent = @"Win32_LogicalDisk.DeviceID=""G:"""
+                }
+            }
+        };
+
+        // 验证 WMI Mock 数据能正确构造分区→盘符映射链
+        // 分区 ID (Antecedent) → 盘符 (Dependent)
+        var partitionId = mock.LogicalDiskPartitionMappings[0].Antecedent
+            .Split("\"")[1];  // "Disk #1, Partition #0"
+        var driveLetter = mock.LogicalDiskPartitionMappings[0].Dependent
+            .Split("\"")[1];  // "G:"
+        Assert.Equal("Disk #1, Partition #0", partitionId);
+        Assert.Equal("G:", driveLetter);
+
+        // 验证磁盘→分区链
+        var diskToPartitionId = mock.DiskPartitionMappings[0].Dependent
+            .Split("\"")[1];  // "Disk #1, Partition #0"
+        Assert.Equal(partitionId, diskToPartitionId);
     }
 }

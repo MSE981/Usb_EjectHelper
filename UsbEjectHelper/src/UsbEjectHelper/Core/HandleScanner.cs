@@ -176,13 +176,14 @@ public class HandleScanner
 
             if (result == NativeMethodsRm.ERROR_MORE_DATA && procInfoNeeded > 0)
             {
-                // 分配缓冲区并重新查询
-                var bufferSize = (int)(procInfoNeeded + procInfoCount * (uint)Marshal.SizeOf<NativeMethodsRm.RM_PROCESS_INFO>());
+                // 分配缓冲区并重新查询：将 procInfoCount 设为 procInfoNeeded 以容纳所有条目
+                procInfoCount = procInfoNeeded;
+                var bufferSize = (int)(procInfoCount * (uint)Marshal.SizeOf<NativeMethodsRm.RM_PROCESS_INFO>());
                 var buffer = Marshal.AllocHGlobal(bufferSize);
 
                 try
                 {
-                    // 将 procInfoNeeded 作为输出参数重新设置
+                    // 二次调用携带足够大的缓冲区
                     result = NativeMethodsRm.RmGetList(
                         sessionHandle, out procInfoNeeded, ref procInfoCount, buffer, ref rebootReasons);
 

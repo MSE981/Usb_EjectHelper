@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using System.IO.Pipes;
 using System.Text;
+using UsbEjectHelper.Settings;
 using UsbEjectHelper.UI;
 
 namespace UsbEjectHelper.App;
@@ -59,8 +60,16 @@ public class TrayApplication : ApplicationContext
         // 启动 IPC 监听
         StartIpcListener();
 
-        // 默认启动后最小化到托盘（后续由设置控制）
-        ShowMainWindow();
+        // 根据设置决定是否显示主窗口
+        var settings = AppSettings.Load();
+        if (!settings.MinimizeToTrayOnStart)
+        {
+            ShowMainWindow();
+        }
+        else
+        {
+            _logger.LogInformation("启动后最小化到托盘（MinimizeToTrayOnStart=true）。");
+        }
     }
 
     /// <summary>

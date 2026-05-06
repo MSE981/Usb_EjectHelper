@@ -51,15 +51,15 @@ public class EjectService
 
         try
         {
-            // 方法 1: 尝试通过 shell32 弹出
+            // 方法 1: Windows Shell "安全删除硬件" 路径（保守，优先）
             var shellResult = EjectViaShell(normalized);
             if (shellResult == EjectResult.Success)
             {
-                _logger.LogInformation("{Drive} 弹出成功。", normalized);
+                _logger.LogInformation("{Drive} 弹出成功（Shell 路径）。", normalized);
                 return (EjectResult.Success, $"设备 {normalized} 已安全弹出，可以拔出。");
             }
 
-            // 方法 2: 尝试通过 CM_Request_Device_Eject（需要设备实例 ID）
+            // 方法 2: CM_Request_Device_Eject（SetupDi 路径）
             var cmResult = EjectViaCfgMgr32(normalized);
             if (cmResult == EjectResult.Success)
             {
@@ -87,19 +87,117 @@ public class EjectService
     }
 
     /// <summary>
-    /// 通过 Windows Shell 尝试弹出。
+    /// 通过 Windows Shell COM 尝试弹出（保守路径，等效于右键"弹出"）。
+    /// 不做 lock/dismount/eject media 的强制卸载。
     /// </summary>
     private EjectResult EjectViaShell(string driveLetter)
     {
         try
         {
-            // 使用 SHOpenWithDialog / 实际应该用 shell 的弹出方法
-            // MVP 使用 Win32 API: 打开卷并尝试 lock/dismount
+            Type? shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType == null)
+            {
+                _logger.LogWarning("Shell.Application COM 类型不可用。");
+                return EjectResult.ApiFailure;
+            }
+
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic drivesFolder = shell.Namespace(17);
+            dynamic? driveItem = drivesFolder.ParseName(driveLetter);
+
+            if (driveItem == null)
+            {
+                _logger.LogDebug("Shell 找不到驱动器的文件夹项: {Drive}", driveLetter);
+                return EjectResult.DeviceNotFound;
+            }
+
+            // 遍历可用动词，查找"弹出"或"Eject"
+            dynamic verbs = driveItem.Verbs();
+            bool foundEject = false;
+            foreach (dynamic verb in verbs)
+            {
+                string verbName = verb.Name;
+                if (verbName.Contains("弹出") || verbName.Equals("E&ject", StringComparison.OrdinalIgnoreCase) ||
+                    verbName.Equals("Eject", StringComparison.OrdinalIgnoreCase))
+                {
+                    verb.DoIt();
+                    foundEject = true;
+                    _logger.LogInformation("Shell 执行动词成功: {Verb}", verbName);
+                    break;
+                }
+            }
+
+            if (!foundEject)
+            {
+                _logger.LogDebug("Shell 未找到'弹出'动词（设备可能不支持安全弹出）: {Drive}", driveLetter);
+                return EjectResult.DeviceBusy;
+            }
+
+            // ⚠ Shell.InvokeVerb 不会在失败时抛异常，必须验证设备是否真的消失
+            // 等待最多 3 秒，轮询检查盘符是否已从系统中移除
+            var maxWait = TimeSpan.FromSeconds(3);
+            var interval = TimeSpan.FromMilliseconds(200);
+            var deadline = DateTime.UtcNow + maxWait;
+
+            while (DateTime.UtcNow < deadline)
+            {
+                if (!DriveStillExists(driveLetter))
+                {
+                    _logger.LogInformation("{Drive} 已成功从系统中移除。", driveLetter);
+                    return EjectResult.Success;
+                }
+                Thread.Sleep(interval);
+            }
+
+            // 超时：盘符仍然存在，弹出失败
+            _logger.LogWarning("{Drive} 弹出后盘符仍然存在，实际弹出失败。", driveLetter);
+            return EjectResult.DeviceBusy;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _logger.LogDebug("Shell 弹出权限不足: {Drive}", driveLetter);
+            return EjectResult.AccessDenied;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Shell 弹出异常: {Drive}", driveLetter);
+            return EjectResult.ApiFailure;
+        }
+    }
+
+    /// <summary>
+    /// 检查指定盘符是否仍然存在于系统中。
+    /// </summary>
+    private static bool DriveStillExists(string driveLetter)
+    {
+        try
+        {
+            var normalized = VolumeResolver.NormalizeDriveLetter(driveLetter);
+            if (string.IsNullOrEmpty(normalized)) return false;
+
+            return DriveInfo.GetDrives()
+                .Any(d => d.IsReady &&
+                          string.Equals(d.Name.TrimEnd('\\').Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false; // 异常时视为已移除
+        }
+    }
+
+    /// <summary>
+    /// 通过 CM_Request_Device_Eject / SetupDi 尝试弹出。
+    /// 需要获取设备实例 ID，从盘符反查。
+    /// </summary>
+    private EjectResult EjectViaCfgMgr32(string driveLetter)
+    {
+        try
+        {
             var volumePath = $@"\\.\{driveLetter}";
 
             using var handle = NativeMethodsForEject.CreateFile(
                 volumePath,
-                NativeMethodsForEject.GENERIC_READ | NativeMethodsForEject.GENERIC_WRITE,
+                NativeMethodsForEject.GENERIC_READ,
                 NativeMethodsForEject.FILE_SHARE_READ | NativeMethodsForEject.FILE_SHARE_WRITE,
                 IntPtr.Zero,
                 NativeMethodsForEject.OPEN_EXISTING,
@@ -109,80 +207,24 @@ public class EjectService
             if (handle.IsInvalid)
             {
                 var error = Marshal.GetLastWin32Error();
-                _logger.LogDebug("CreateFile({Path}) 失败: {Error}", volumePath, error);
-                return error switch
-                {
-                    5 => EjectResult.AccessDenied,   // ACCESS_DENIED
-                    2 => EjectResult.DeviceNotFound, // FILE_NOT_FOUND
-                    _ => EjectResult.DeviceBusy
-                };
+                _logger.LogDebug("CM: 无法打开卷 {Volume}: 错误 {Error}", volumePath, error);
+                return error == 2 ? EjectResult.DeviceNotFound :
+                       error == 5 ? EjectResult.AccessDenied :
+                       EjectResult.ApiFailure;
             }
 
-            // 尝试锁定卷
-            if (!NativeMethodsForEject.DeviceIoControl(
-                    handle,
-                    NativeMethodsForEject.FSCTL_LOCK_VOLUME,
-                    IntPtr.Zero, 0,
-                    IntPtr.Zero, 0,
-                    out _, IntPtr.Zero))
-            {
-                var error = Marshal.GetLastWin32Error();
-                _logger.LogDebug("FSCTL_LOCK_VOLUME 失败: {Error}", error);
-                handle.Close();
-                return EjectResult.DeviceBusy;
-            }
-
-            // 尝试卸载卷
-            if (!NativeMethodsForEject.DeviceIoControl(
-                    handle,
-                    NativeMethodsForEject.FSCTL_DISMOUNT_VOLUME,
-                    IntPtr.Zero, 0,
-                    IntPtr.Zero, 0,
-                    out _, IntPtr.Zero))
-            {
-                var error = Marshal.GetLastWin32Error();
-                _logger.LogDebug("FSCTL_DISMOUNT_VOLUME 失败: {Error}", error);
-                // 解锁并返回
-                NativeMethodsForEject.DeviceIoControl(
-                    handle, NativeMethodsForEject.FSCTL_UNLOCK_VOLUME,
-                    IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
-                handle.Close();
-                return EjectResult.DeviceBusy;
-            }
-
-            // 尝试弹出（preventative removal）
-            if (!NativeMethodsForEject.DeviceIoControl(
-                    handle,
-                    NativeMethodsForEject.IOCTL_STORAGE_EJECT_MEDIA,
-                    IntPtr.Zero, 0,
-                    IntPtr.Zero, 0,
-                    out _, IntPtr.Zero))
-            {
-                var error = Marshal.GetLastWin32Error();
-                _logger.LogDebug("IOCTL_STORAGE_EJECT_MEDIA 失败: {Error}", error);
-                handle.Close();
-                return EjectResult.DeviceBusy;
-            }
-
+            // 通过 IOCTL 获取设备号，然后遍历 SetupDi 找匹配设备
+            // MVP 简化：调用 CM_Request_Device_Eject 需要 devinst，路径较长
+            // 当前 CM 路径作为 Shell 失败后的补充，暂不实现完整链路
             handle.Close();
-            return EjectResult.Success;
+            _logger.LogDebug("CM_Request_Device_Eject 暂未实现完整链路（Shell 路径为首选）。");
+            return EjectResult.ApiFailure;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Shell 弹出异常");
+            _logger.LogWarning(ex, "CM 弹出异常: {Drive}", driveLetter);
             return EjectResult.ApiFailure;
         }
-    }
-
-    /// <summary>
-    /// 通过 cfgmgr32 尝试弹出（预留接口，MVP 若 Shell 方法已够用则跳过）。
-    /// </summary>
-    private EjectResult EjectViaCfgMgr32(string driveLetter)
-    {
-        // MVP 阶段：Shell 方法（lock/dismount/eject）已覆盖常见场景。
-        // CM_Request_Device_Eject 需要设备实例 ID，后续阶段通过 SetupDi 获取。
-        _logger.LogDebug("CM 弹出方法暂未实现（需要设备实例 ID）。");
-        return EjectResult.ApiFailure;
     }
 }
 
@@ -196,24 +238,12 @@ internal static class NativeMethodsForEject
     public const uint FILE_SHARE_READ = 0x00000001;
     public const uint FILE_SHARE_WRITE = 0x00000002;
     public const uint OPEN_EXISTING = 3;
-    public const uint FSCTL_LOCK_VOLUME = 0x00090018;
-    public const uint FSCTL_UNLOCK_VOLUME = 0x0009001C;
-    public const uint FSCTL_DISMOUNT_VOLUME = 0x00090020;
-    public const uint IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808;
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
         string lpFileName, uint dwDesiredAccess, uint dwShareMode,
         IntPtr lpSecurityAttributes, uint dwCreationDisposition,
         uint dwFlagsAndAttributes, IntPtr hTemplateFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool DeviceIoControl(
-        Microsoft.Win32.SafeHandles.SafeFileHandle hDevice, uint dwIoControlCode,
-        IntPtr lpInBuffer, uint nInBufferSize,
-        IntPtr lpOutBuffer, uint nOutBufferSize,
-        out uint lpBytesReturned, IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

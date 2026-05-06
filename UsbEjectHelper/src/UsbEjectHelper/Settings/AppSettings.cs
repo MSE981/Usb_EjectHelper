@@ -8,10 +8,14 @@ namespace UsbEjectHelper.Settings;
 /// </summary>
 public class AppSettings
 {
-    private static readonly string SettingsFilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "UsbEjectHelper",
-        "settings.json");
+    private static string? _settingsFilePathOverride;
+
+    private static string SettingsFilePath =>
+        _settingsFilePathOverride ??
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "UsbEjectHelper",
+            "settings.json");
 
     /// <summary>开机自启动</summary>
     public bool AutoStart { get; set; }
@@ -74,5 +78,13 @@ public class AppSettings
                 // 保存失败静默处理
             }
         }
+    }
+
+    /// <summary>
+    /// （仅测试用）覆盖设置文件路径，传 null 恢复默认。
+    /// </summary>
+    public static void OverrideFilePath(string? path)
+    {
+        _settingsFilePathOverride = path;
     }
 }
