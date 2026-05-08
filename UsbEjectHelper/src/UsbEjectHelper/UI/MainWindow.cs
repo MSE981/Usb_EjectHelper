@@ -22,6 +22,7 @@ public class MainWindow : Form
     private readonly Button _refreshButton;
     private readonly Button _exportButton;
     private readonly Button _settingsButton;
+    private readonly Button _aboutButton;
     private readonly Button _hideButton;
 
     private readonly ListView _resultListView;
@@ -74,13 +75,15 @@ public class MainWindow : Form
         _refreshButton  = new Button { Text = "刷新 (&R)",      Location = new Point( 208, 200), Size = new Size(90, 30) };
         _exportButton   = new Button { Text = "导出 JSON",      Location = new Point( 306, 200), Size = new Size(90, 30) };
         _settingsButton = new Button { Text = "设置 (&O)",      Location = new Point( 404, 200), Size = new Size(90, 30) };
-        _hideButton     = new Button { Text = "隐藏到托盘 (&H)", Location = new Point( 502, 200), Size = new Size(110, 30) };
+        _aboutButton    = new Button { Text = "关于 (&A)",      Location = new Point( 502, 200), Size = new Size(80, 30) };
+        _hideButton     = new Button { Text = "隐藏到托盘 (&H)", Location = new Point( 590, 200), Size = new Size(110, 30) };
 
         _ejectButton.Click   += OnEject;
         _scanButton.Click    += OnScan;
         _refreshButton.Click += (_, _) => DeviceRefreshRequested?.Invoke(this, EventArgs.Empty);
         _exportButton.Click  += OnExport;
         _settingsButton.Click += (_, _) => ShowSettings();
+        _aboutButton.Click   += (_, _) => ShowAbout();
         _hideButton.Click    += (_, _) => Hide();
 
         var resultLabel = new Label
@@ -112,7 +115,7 @@ public class MainWindow : Form
         {
             deviceLabel, _deviceListView,
             _ejectButton, _scanButton, _refreshButton, _exportButton,
-            _settingsButton, _hideButton,
+            _settingsButton, _aboutButton, _hideButton,
             resultLabel, _resultListView,
             _statusStrip
         });
@@ -169,6 +172,19 @@ public class MainWindow : Form
         }
 
         SetStatus($"已检测到 {devices.Count} 个可弹出设备。");
+    }
+
+    /// <summary>打开"关于"对话框（模态）。</summary>
+    public void ShowAbout()
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(ShowAbout);
+            return;
+        }
+
+        using var dlg = new AboutDialog();
+        dlg.ShowDialog(this);
     }
 
     /// <summary>打开设置对话框（模态）。</summary>

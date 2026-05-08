@@ -13,6 +13,21 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <Product>USB Eject Helper</Product>
+    <AssemblyTitle>USB Eject Helper</AssemblyTitle>
+    <Description>Windows tray utility for safely ejecting USB removable storage devices, with optional handle scanning to identify processes holding files open.</Description>
+    <Authors>Jin Bohan</Authors>
+    <Company>Jin Bohan</Company>
+    <Copyright>Copyright (C) 2026 Jin Bohan</Copyright>
+    <Version>0.8.0</Version>
+    <FileVersion>0.8.0.0</FileVersion>
+    <AssemblyVersion>0.8.0.0</AssemblyVersion>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+    <PackageProjectUrl></PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
