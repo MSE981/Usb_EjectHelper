@@ -182,7 +182,7 @@ public sealed class AboutDialog : Form
     private static string? TryFindLicenseFile()
     {
         var probe = AppContext.BaseDirectory;
-        for (int i = 0; i < 6 && !string.IsNullOrEmpty(probe); i++)
+        for (int i = 0; i < 8 && !string.IsNullOrEmpty(probe); i++)
         {
             var candidate = Path.Combine(probe, "LICENSE");
             if (File.Exists(candidate)) return candidate;
