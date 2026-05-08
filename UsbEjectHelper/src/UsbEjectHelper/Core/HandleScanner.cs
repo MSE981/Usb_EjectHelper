@@ -157,7 +157,7 @@ public class HandleScanner : IDisposable
         {
             // 启动 RM 会话
             var sessionKey = Guid.NewGuid().ToString();
-            var result = NativeMethodsRm.RmStartSession(out sessionHandle, 0, sessionKey);
+            var result = NativeMethods.RmStartSession(out sessionHandle, 0, sessionKey);
             if (result != 0)
             {
                 _logger.LogWarning("RmStartSession 失败: {Result}", result);
@@ -166,12 +166,12 @@ public class HandleScanner : IDisposable
 
             // 注册目标资源（盘符路径）
             var resourcePath = driveLetter + "\\";
-            result = NativeMethodsRm.RmRegisterResources(
+            result = NativeMethods.RmRegisterResources(
                 sessionHandle, 1, new[] { resourcePath }, 0, null, 0, null);
             if (result != 0)
             {
                 _logger.LogWarning("RmRegisterResources 失败: {Result}", result);
-                NativeMethodsRm.RmEndSession(sessionHandle);
+                NativeMethods.RmEndSession(sessionHandle);
                 return results;
             }
 
@@ -180,35 +180,35 @@ public class HandleScanner : IDisposable
             uint procInfoCount = 0;
             uint rebootReasons = 0;
 
-            result = NativeMethodsRm.RmGetList(
+            result = NativeMethods.RmGetList(
                 sessionHandle, out procInfoNeeded, ref procInfoCount, IntPtr.Zero, ref rebootReasons);
 
-            if (result == NativeMethodsRm.ERROR_MORE_DATA && procInfoNeeded > 0)
+            if (result == NativeMethods.ERROR_MORE_DATA && procInfoNeeded > 0)
             {
                 // 分配缓冲区并重新查询：将 procInfoCount 设为 procInfoNeeded 以容纳所有条目
                 procInfoCount = procInfoNeeded;
-                var bufferSize = (int)(procInfoCount * (uint)Marshal.SizeOf<NativeMethodsRm.RM_PROCESS_INFO>());
+                var bufferSize = (int)(procInfoCount * (uint)Marshal.SizeOf<NativeMethods.RM_PROCESS_INFO>());
                 var buffer = Marshal.AllocHGlobal(bufferSize);
 
                 try
                 {
                     // 二次调用携带足够大的缓冲区
-                    result = NativeMethodsRm.RmGetList(
+                    result = NativeMethods.RmGetList(
                         sessionHandle, out procInfoNeeded, ref procInfoCount, buffer, ref rebootReasons);
 
-                    if (result == 0) // ERROR_SUCCESS
+                    if (result == NativeMethods.ERROR_SUCCESS)
                     {
                         // 解析 RM_PROCESS_INFO 数组
                         var offset = buffer;
                         for (int i = 0; i < procInfoCount && !cancellationToken.IsCancellationRequested; i++)
                         {
-                            var procInfo = Marshal.PtrToStructure<NativeMethodsRm.RM_PROCESS_INFO>(offset);
+                            var procInfo = Marshal.PtrToStructure<NativeMethods.RM_PROCESS_INFO>(offset);
                             if (procInfo.Process.dwProcessId != 0)
                             {
                                 var procResults = BuildResultsFromRmProcess(procInfo);
                                 results.AddRange(procResults);
                             }
-                            offset += Marshal.SizeOf<NativeMethodsRm.RM_PROCESS_INFO>();
+                            offset += Marshal.SizeOf<NativeMethods.RM_PROCESS_INFO>();
                         }
                     }
                     else
@@ -221,9 +221,8 @@ public class HandleScanner : IDisposable
                     Marshal.FreeHGlobal(buffer);
                 }
             }
-            else if (result == 0)
+            else if (result == NativeMethods.ERROR_SUCCESS)
             {
-                // 无占用进程
                 _logger.LogDebug("RmGetList 返回 0 个占用进程。");
             }
             else
@@ -231,14 +230,14 @@ public class HandleScanner : IDisposable
                 _logger.LogWarning("RmGetList 失败: {Result}", result);
             }
 
-            NativeMethodsRm.RmEndSession(sessionHandle);
+            NativeMethods.RmEndSession(sessionHandle);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Restart Manager 扫描异常");
             if (sessionHandle != 0)
             {
-                try { NativeMethodsRm.RmEndSession(sessionHandle); } catch { }
+                try { NativeMethods.RmEndSession(sessionHandle); } catch { }
             }
         }
 
@@ -248,7 +247,7 @@ public class HandleScanner : IDisposable
     /// <summary>
     /// 从 RM_PROCESS_INFO 构建扫描结果，补充进程元数据。
     /// </summary>
-    private List<HandleScanResult> BuildResultsFromRmProcess(NativeMethodsRm.RM_PROCESS_INFO procInfo)
+    private List<HandleScanResult> BuildResultsFromRmProcess(NativeMethods.RM_PROCESS_INFO procInfo)
     {
         var results = new List<HandleScanResult>();
         var pid = (int)procInfo.Process.dwProcessId;
@@ -282,61 +281,4 @@ public class HandleScanner : IDisposable
         _ownedFactory?.Dispose();
         GC.SuppressFinalize(this);
     }
-}
-
-/// <summary>
-/// Restart Manager API P/Invoke 声明。
-/// </summary>
-internal static class NativeMethodsRm
-{
-    public const int ERROR_SUCCESS = 0;
-    public const int ERROR_MORE_DATA = 234;
-
-    // RM_UNIQUE_PROCESS
-    [StructLayout(LayoutKind.Sequential)]
-    public struct RM_UNIQUE_PROCESS
-    {
-        public uint dwProcessId;
-        public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime;
-    }
-
-    // RM_PROCESS_INFO
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct RM_PROCESS_INFO
-    {
-        public RM_UNIQUE_PROCESS Process;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string strAppName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-        public string strServiceShortName;
-        public uint ApplicationType;
-        public uint AppStatus;
-        public uint TSSessionId;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool bRestartable;
-    }
-
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
-    public static extern int RmStartSession(out uint pSessionHandle, int dwSessionFlags, string strSessionKey);
-
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
-    public static extern int RmEndSession(uint dwSessionHandle);
-
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
-    public static extern int RmRegisterResources(
-        uint dwSessionHandle,
-        uint nFiles,
-        string[] rgsFileNames,
-        uint nApplications,
-        RM_UNIQUE_PROCESS[]? rgApplications,
-        uint nServices,
-        string[]? rgsServiceNames);
-
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
-    public static extern int RmGetList(
-        uint dwSessionHandle,
-        out uint pnProcInfoNeeded,
-        ref uint pnProcInfo,
-        IntPtr rgAffectedApps,
-        ref uint lpdwRebootReasons);
 }

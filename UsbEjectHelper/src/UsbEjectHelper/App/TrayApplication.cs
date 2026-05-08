@@ -164,7 +164,7 @@ public class TrayApplication : ApplicationContext
                 try
                 {
                     using var server = new NamedPipeServerStream(
-                        "UsbEjectHelper_Pipe_{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}",
+                        AppConstants.PipeName,
                         PipeDirection.In,
                         maxNumberOfServerInstances: 1,
                         PipeTransmissionMode.Byte,
@@ -175,7 +175,7 @@ public class TrayApplication : ApplicationContext
                     await server.ReadAsync(buffer, token);
                     var msg = Encoding.UTF8.GetString(buffer).Trim('\0');
 
-                    if (msg == "SHOW")
+                    if (msg == AppConstants.IpcMessageShow)
                     {
                         // 需要在 UI 线程执行
                         if (_mainWindow != null && !_mainWindow.IsDisposed)

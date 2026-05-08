@@ -9,10 +9,6 @@ namespace UsbEjectHelper.App;
 /// </summary>
 public static class Program
 {
-    private const string AppGuid = "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}";
-    private const string MutexName = @"Local\UsbEjectHelper-" + AppGuid;
-    private const string PipeName = "UsbEjectHelper_Pipe_" + AppGuid;
-
     private static readonly ILoggerFactory LoggerFactoryInstance =
         Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
@@ -33,7 +29,7 @@ public static class Program
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
+            using var mutex = new Mutex(initiallyOwned: true, AppConstants.MutexName, out bool createdNew);
 
             if (!createdNew)
             {
@@ -85,9 +81,10 @@ public static class Program
     {
         try
         {
-            using var client = new System.IO.Pipes.NamedPipeClientStream(".", PipeName, System.IO.Pipes.PipeDirection.Out);
+            using var client = new System.IO.Pipes.NamedPipeClientStream(
+                ".", AppConstants.PipeName, System.IO.Pipes.PipeDirection.Out);
             client.Connect(timeout: 2000);
-            var message = Encoding.UTF8.GetBytes("SHOW");
+            var message = Encoding.UTF8.GetBytes(AppConstants.IpcMessageShow);
             client.Write(message, 0, message.Length);
             Log.LogInformation("已通知已有实例显示主窗口。");
         }

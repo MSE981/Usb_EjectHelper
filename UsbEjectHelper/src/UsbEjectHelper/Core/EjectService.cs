@@ -237,12 +237,12 @@ public class EjectService : IDisposable
         {
             var volumePath = $@"\\.\{driveLetter}";
 
-            using var handle = NativeMethodsForEject.CreateFile(
+            using var handle = NativeMethods.CreateFile(
                 volumePath,
-                NativeMethodsForEject.GENERIC_READ,
-                NativeMethodsForEject.FILE_SHARE_READ | NativeMethodsForEject.FILE_SHARE_WRITE,
+                NativeMethods.GENERIC_READ,
+                NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE,
                 IntPtr.Zero,
-                NativeMethodsForEject.OPEN_EXISTING,
+                NativeMethods.OPEN_EXISTING,
                 0,
                 IntPtr.Zero);
 
@@ -255,10 +255,7 @@ public class EjectService : IDisposable
                        EjectResult.ApiFailure;
             }
 
-            // 通过 IOCTL 获取设备号，然后遍历 SetupDi 找匹配设备
-            // MVP 简化：调用 CM_Request_Device_Eject 需要 devinst，路径较长
-            // 当前 CM 路径作为 Shell 失败后的补充，暂不实现完整链路
-            handle.Close();
+            // PR1 阶段保持占位，PR5 中补完 IOCTL_STORAGE_GET_DEVICE_NUMBER → SetupDi → CM_Request_Device_Eject 完整链路。
             _logger.LogDebug("CM_Request_Device_Eject 暂未实现完整链路（Shell 路径为首选）。");
             return EjectResult.ApiFailure;
         }
@@ -268,26 +265,4 @@ public class EjectService : IDisposable
             return EjectResult.ApiFailure;
         }
     }
-}
-
-/// <summary>
-/// 弹出服务使用的 P/Invoke 声明（内部类，避免污染 NativeMethods）。
-/// </summary>
-internal static class NativeMethodsForEject
-{
-    public const uint GENERIC_READ = 0x80000000;
-    public const uint GENERIC_WRITE = 0x40000000;
-    public const uint FILE_SHARE_READ = 0x00000001;
-    public const uint FILE_SHARE_WRITE = 0x00000002;
-    public const uint OPEN_EXISTING = 3;
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
-        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
-        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
-        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool CloseHandle(IntPtr hObject);
 }
