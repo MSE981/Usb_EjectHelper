@@ -18,6 +18,7 @@ public class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _refreshMenuItem;
     private readonly ToolStripMenuItem _settingsMenuItem;
     private readonly ToolStripMenuItem _exitMenuItem;
+    private readonly DeviceNotificationWindow _deviceNotifyWindow;
     private MainWindow? _mainWindow;
     private CancellationTokenSource? _pipeCts;
     private bool _isExiting;
@@ -57,6 +58,10 @@ public class TrayApplication : ApplicationContext
         _notifyIcon.DoubleClick += OnShowWindow;
 
         _logger.LogInformation("托盘已初始化。");
+
+        _deviceNotifyWindow = new DeviceNotificationWindow(
+            _services.DeviceWatcher,
+            _services.LoggerFactory.CreateLogger<DeviceNotificationWindow>());
 
         StartIpcListener();
         _services.DeviceWatcher.Start();
@@ -109,6 +114,7 @@ public class TrayApplication : ApplicationContext
         _pipeCts?.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _deviceNotifyWindow.Dispose();
         _mainWindow?.Close();
         _mainWindow?.Dispose();
         _mainWindow = null;
@@ -122,6 +128,7 @@ public class TrayApplication : ApplicationContext
             _pipeCts?.Cancel();
             _pipeCts?.Dispose();
             _notifyIcon.Dispose();
+            _deviceNotifyWindow.Dispose();
             _mainWindow?.Dispose();
         }
         base.Dispose(disposing);

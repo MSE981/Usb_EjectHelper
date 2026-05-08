@@ -2,13 +2,13 @@ using Microsoft.Extensions.Logging;
 using System.Text;
 using UsbEjectHelper.App;
 using UsbEjectHelper.Core;
-using UsbEjectHelper.Settings;
 
 namespace UsbEjectHelper.UI;
 
 /// <summary>
 /// 主窗口 —— 设备列表、操作按钮、占用结果表格、状态栏。
-/// 服务统一由 <see cref="ServiceComposer"/> 注入；本窗口不创建也不释放服务。
+/// 服务由 <see cref="ServiceComposer"/> 注入，本窗口不创建也不释放服务。
+/// 设置由 <see cref="SettingsForm"/> 提供；WM_DEVICECHANGE 由 <see cref="DeviceNotificationWindow"/> 接收。
 /// </summary>
 public class MainWindow : Form
 {
@@ -17,30 +17,14 @@ public class MainWindow : Form
     private readonly ILogger<MainWindow> _logger;
 
     private readonly ListView _deviceListView;
-    private readonly ColumnHeader _driveCol;
-    private readonly ColumnHeader _labelCol;
-    private readonly ColumnHeader _fsCol;
-    private readonly ColumnHeader _capacityCol;
-
     private readonly Button _ejectButton;
     private readonly Button _scanButton;
     private readonly Button _refreshButton;
     private readonly Button _exportButton;
 
     private readonly ListView _resultListView;
-    private readonly ColumnHeader _pidCol;
-    private readonly ColumnHeader _procNameCol;
-    private readonly ColumnHeader _procPathCol;
-    private readonly ColumnHeader _filePathCol;
-    private readonly ColumnHeader _methodCol;
-
     private readonly StatusStrip _statusStrip;
     private readonly ToolStripStatusLabel _statusLabel;
-
-    private readonly Panel _settingsPanel;
-    private CheckBox _autoStartCheckBox = null!;
-    private CheckBox _minimizeToTrayCheckBox = null!;
-    private CheckBox _closeToTrayCheckBox = null!;
 
     private readonly EventHandler<List<DeviceInfo>> _devicesChangedHandler;
 
@@ -59,7 +43,7 @@ public class MainWindow : Form
         CloseToTray = _services.Settings.CloseToTray;
 
         Text = "USB Eject Helper";
-        Size = new Size(800, 600);
+        Size = new Size(800, 560);
         StartPosition = FormStartPosition.CenterScreen;
 
         var deviceLabel = new Label
@@ -78,10 +62,10 @@ public class MainWindow : Form
             MultiSelect = false,
             GridLines = true
         };
-        _driveCol = _deviceListView.Columns.Add("盘符", 50);
-        _labelCol = _deviceListView.Columns.Add("卷标", 100);
-        _fsCol = _deviceListView.Columns.Add("文件系统", 80);
-        _capacityCol = _deviceListView.Columns.Add("容量", 120);
+        _deviceListView.Columns.Add("盘符", 50);
+        _deviceListView.Columns.Add("卷标", 100);
+        _deviceListView.Columns.Add("文件系统", 80);
+        _deviceListView.Columns.Add("容量", 120);
 
         _ejectButton = new Button { Text = "弹出 (&E)", Location = new Point(12, 200), Size = new Size(90, 30) };
         _scanButton = new Button { Text = "扫描占用 (&S)", Location = new Point(110, 200), Size = new Size(90, 30) };
@@ -103,30 +87,26 @@ public class MainWindow : Form
         _resultListView = new ListView
         {
             Location = new Point(12, 260),
-            Size = new Size(760, 200),
+            Size = new Size(760, 220),
             View = View.Details,
             FullRowSelect = true,
             GridLines = true
         };
-        _pidCol = _resultListView.Columns.Add("PID", 60);
-        _procNameCol = _resultListView.Columns.Add("进程名", 120);
-        _procPathCol = _resultListView.Columns.Add("进程路径", 200);
-        _filePathCol = _resultListView.Columns.Add("占用路径", 200);
-        _methodCol = _resultListView.Columns.Add("检测方法", 80);
+        _resultListView.Columns.Add("PID", 60);
+        _resultListView.Columns.Add("进程名", 120);
+        _resultListView.Columns.Add("进程路径", 200);
+        _resultListView.Columns.Add("占用路径", 200);
+        _resultListView.Columns.Add("检测方法", 80);
 
         _statusStrip = new StatusStrip();
         _statusLabel = new ToolStripStatusLabel("就绪");
         _statusStrip.Items.Add(_statusLabel);
-
-        _settingsPanel = CreateSettingsPanel();
-        _settingsPanel.Visible = false;
 
         Controls.AddRange(new Control[]
         {
             deviceLabel, _deviceListView,
             _ejectButton, _scanButton, _refreshButton, _exportButton,
             resultLabel, _resultListView,
-            _settingsPanel,
             _statusStrip
         });
 
@@ -149,17 +129,6 @@ public class MainWindow : Form
         }
 
         _services.DeviceWatcher.RefreshDevices();
-    }
-
-    /// <summary>处理 WM_DEVICECHANGE 消息，转发给 DeviceWatcher。</summary>
-    protected override void WndProc(ref Message m)
-    {
-        const int WM_DEVICECHANGE = 0x0219;
-        if (m.Msg == WM_DEVICECHANGE)
-        {
-            _services.DeviceWatcher.HandleDeviceChangeMessage(m.Msg, m.WParam, m.LParam);
-        }
-        base.WndProc(ref m);
     }
 
     private void OnDevicesChanged(object? sender, List<DeviceInfo> devices)
@@ -195,7 +164,7 @@ public class MainWindow : Form
         SetStatus($"已检测到 {devices.Count} 个可弹出设备。");
     }
 
-    /// <summary>显示/隐藏设置面板。</summary>
+    /// <summary>打开设置对话框（模态）。</summary>
     public void ShowSettings()
     {
         if (InvokeRequired)
@@ -204,10 +173,13 @@ public class MainWindow : Form
             return;
         }
 
-        _settingsPanel.Visible = !_settingsPanel.Visible;
-        if (_settingsPanel.Visible)
+        var logger = _services.LoggerFactory.CreateLogger<SettingsForm>();
+        using var dlg = new SettingsForm(_services.Settings, _services.StartupManager, logger);
+        var result = dlg.ShowDialog(this);
+        if (result == DialogResult.OK)
         {
-            LoadSettings();
+            CloseToTray = dlg.CloseToTrayResult;
+            SetStatus("设置已保存。");
         }
     }
 
@@ -221,87 +193,6 @@ public class MainWindow : Form
         }
 
         _statusLabel.Text = text;
-    }
-
-    private Panel CreateSettingsPanel()
-    {
-        var panel = new Panel
-        {
-            Location = new Point(12, 470),
-            Size = new Size(760, 80),
-            BorderStyle = BorderStyle.FixedSingle
-        };
-
-        var titleLabel = new Label
-        {
-            Text = "设置",
-            Location = new Point(8, 8),
-            AutoSize = true,
-            Font = new Font(Font, FontStyle.Bold)
-        };
-
-        _autoStartCheckBox = new CheckBox
-        {
-            Text = "开机自启动",
-            Location = new Point(8, 30),
-            AutoSize = true
-        };
-
-        _minimizeToTrayCheckBox = new CheckBox
-        {
-            Text = "启动后最小化到托盘",
-            Location = new Point(140, 30),
-            AutoSize = true
-        };
-
-        _closeToTrayCheckBox = new CheckBox
-        {
-            Text = "关闭窗口时最小化到托盘（而非退出）",
-            Location = new Point(340, 30),
-            AutoSize = true,
-            Checked = CloseToTray
-        };
-        _closeToTrayCheckBox.CheckedChanged += (_, _) =>
-        {
-            CloseToTray = _closeToTrayCheckBox.Checked;
-        };
-
-        var saveButton = new Button
-        {
-            Text = "保存设置",
-            Location = new Point(640, 28),
-            Size = new Size(100, 25)
-        };
-        saveButton.Click += OnSaveSettings;
-
-        panel.Controls.AddRange(new Control[]
-        {
-            titleLabel, _autoStartCheckBox, _minimizeToTrayCheckBox, _closeToTrayCheckBox, saveButton
-        });
-
-        return panel;
-    }
-
-    private void LoadSettings()
-    {
-        _autoStartCheckBox.Checked = _services.StartupManager.IsStartupEnabled();
-        _minimizeToTrayCheckBox.Checked = _services.Settings.MinimizeToTrayOnStart;
-        _closeToTrayCheckBox.Checked = _services.Settings.CloseToTray;
-    }
-
-    private void OnSaveSettings(object? sender, EventArgs e)
-    {
-        CloseToTray = _closeToTrayCheckBox.Checked;
-        _services.Settings.AutoStart = _autoStartCheckBox.Checked;
-        _services.Settings.MinimizeToTrayOnStart = _minimizeToTrayCheckBox.Checked;
-        _services.Settings.CloseToTray = _closeToTrayCheckBox.Checked;
-        _services.Settings.Save();
-
-        _services.StartupManager.ToggleStartup(_autoStartCheckBox.Checked);
-
-        SetStatus("设置已保存。");
-        _logger.LogInformation("用户设置已保存：CloseToTray={CloseToTray}, AutoStart={AutoStart}",
-            CloseToTray, _autoStartCheckBox.Checked);
     }
 
     private async void OnEject(object? sender, EventArgs e)
