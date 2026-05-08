@@ -1,53 +1,59 @@
+// UsbEjectHelper - Windows tray utility for safely ejecting USB removable storage devices.
+// Copyright (C) 2026  Jin Bohan
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace UsbEjectHelper.App;
 
 /// <summary>
-/// 应用程序入口点 —— 负责 STA 线程模型、单实例检测、异常兜底日志。
+/// 应用程序入口点 —— STA 线程模型、单实例检测、全局 ILoggerFactory、装配根、异常兜底。
 /// </summary>
 public static class Program
 {
-    private const string AppGuid = "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}";
-    private const string MutexName = @"Local\UsbEjectHelper-" + AppGuid;
-    private const string PipeName = "UsbEjectHelper_Pipe_" + AppGuid;
-
-    private static readonly ILoggerFactory LoggerFactoryInstance =
-        Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
-        {
-            builder
-                .SetMinimumLevel(LogLevel.Information)
-                .AddConsole()
-                .AddDebug();
-        });
-
-    private static readonly ILogger<object> Log = LoggerFactoryInstance.CreateLogger<object>();
-
     [STAThread]
     public static void Main(string[] args)
     {
+        using var loggerFactory = LoggerFactory.Create(builder => builder
+            .SetMinimumLevel(LogLevel.Information)
+            .AddConsole()
+            .AddDebug());
+
+        var bootstrapLogger = loggerFactory.CreateLogger("Bootstrap");
+
         try
         {
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
+            using var mutex = new Mutex(initiallyOwned: true, AppConstants.MutexName, out bool createdNew);
 
             if (!createdNew)
             {
-                Log.LogInformation("检测到已有实例运行，尝试通知已有实例显示主窗口。");
-                NotifyExistingInstance();
-                return; // 静默退出
+                bootstrapLogger.LogInformation("检测到已有实例运行，尝试通知已有实例显示主窗口。");
+                NotifyExistingInstance(bootstrapLogger);
+                return;
             }
 
-            Log.LogInformation("UsbEjectHelper 启动。");
+            bootstrapLogger.LogInformation("UsbEjectHelper 启动。");
 
-            // 捕获未处理异常
             Application.ThreadException += (sender, e) =>
             {
-                Log.LogError(e.Exception, "未处理的 UI 线程异常");
+                bootstrapLogger.LogError(e.Exception, "未处理的 UI 线程异常");
                 MessageBox.Show(
                     $"发生未预期错误：{e.Exception.Message}\n\n详情已写入日志。",
                     "USB Eject Helper - 错误",
@@ -57,14 +63,15 @@ public static class Program
 
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
             {
-                Log.LogError(e.ExceptionObject as Exception, "未处理的 AppDomain 异常");
+                bootstrapLogger.LogError(e.ExceptionObject as Exception, "未处理的 AppDomain 异常");
             };
 
-            Application.Run(new TrayApplication());
+            using var services = ServiceComposer.Build(loggerFactory);
+            Application.Run(new TrayApplication(services));
         }
         catch (Exception ex)
         {
-            Log.LogCritical(ex, "程序启动失败");
+            bootstrapLogger.LogCritical(ex, "程序启动失败");
             MessageBox.Show(
                 $"程序启动失败：{ex.Message}",
                 "USB Eject Helper - 启动失败",
@@ -73,31 +80,29 @@ public static class Program
         }
         finally
         {
-            Log.LogInformation("UsbEjectHelper 退出。");
-            LoggerFactoryInstance.Dispose();
+            bootstrapLogger.LogInformation("UsbEjectHelper 退出。");
         }
     }
 
-    /// <summary>
-    /// 通过命名管道通知已有实例显示主窗口。
-    /// </summary>
-    private static void NotifyExistingInstance()
+    /// <summary>通过命名管道通知已有实例显示主窗口。</summary>
+    private static void NotifyExistingInstance(ILogger logger)
     {
         try
         {
-            using var client = new System.IO.Pipes.NamedPipeClientStream(".", PipeName, System.IO.Pipes.PipeDirection.Out);
+            using var client = new System.IO.Pipes.NamedPipeClientStream(
+                ".", AppConstants.PipeName, System.IO.Pipes.PipeDirection.Out);
             client.Connect(timeout: 2000);
-            var message = Encoding.UTF8.GetBytes("SHOW");
+            var message = Encoding.UTF8.GetBytes(AppConstants.IpcMessageShow);
             client.Write(message, 0, message.Length);
-            Log.LogInformation("已通知已有实例显示主窗口。");
+            logger.LogInformation("已通知已有实例显示主窗口。");
         }
         catch (TimeoutException)
         {
-            Log.LogWarning("通知已有实例超时，静默退出。");
+            logger.LogWarning("通知已有实例超时，静默退出。");
         }
         catch (Exception ex)
         {
-            Log.LogWarning(ex, "通知已有实例失败，静默退出。");
+            logger.LogWarning(ex, "通知已有实例失败，静默退出。");
         }
     }
 }

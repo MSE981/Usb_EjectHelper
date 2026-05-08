@@ -33,8 +33,8 @@ public class ScanSummaryTests
     {
         var summary = new ScanSummary();
         Assert.NotEmpty(summary.LimitationNote);
-        Assert.Contains("Restart Manager", summary.LimitationNote);
-        Assert.Contains("便携软件", summary.LimitationNote);
+        // 安全模式下空结果应给出"开启深度扫描或提权"的可执行建议
+        Assert.Contains("深度扫描", summary.LimitationNote);
     }
 
     [Fact]
@@ -51,9 +51,10 @@ public class ScanSummaryTests
     }
 
     [Fact]
-    public void ScanSummary_DefaultMethod_ShouldBeRestartManager()
+    public void ScanSummary_DefaultMethod_ShouldBeRestartManagerSafeMode()
     {
+        // PR8 起默认安全模式：仅 Restart Manager；NT 句柄枚举只有用户显式开启时才走
         var summary = new ScanSummary();
-        Assert.Equal("Restart Manager", summary.Method);
+        Assert.Equal("Restart Manager (Safe Mode)", summary.Method);
     }
 }

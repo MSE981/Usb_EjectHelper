@@ -1,12 +1,12 @@
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UsbEjectHelper.Core;
 
 /// <summary>
 /// 卷路径解析器 —— 盘符、卷 GUID、NT 设备路径之间的映射与规范化。
 /// </summary>
-public class VolumeResolver
+public class VolumeResolver : IVolumeResolver, IDisposable
 {
     private readonly ILogger<VolumeResolver> _logger;
 
@@ -24,7 +24,7 @@ public class VolumeResolver
 
     public VolumeResolver(ILogger<VolumeResolver>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<VolumeResolver>();
+        _logger = logger ?? NullLogger<VolumeResolver>.Instance;
         BuildMappings();
     }
 
@@ -215,4 +215,6 @@ public class VolumeResolver
         catch (Exception) { }
         return string.Empty;
     }
+
+    public void Dispose() => GC.SuppressFinalize(this);
 }

@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32.SafeHandles;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace UsbEjectHelper.Core;
@@ -32,7 +32,7 @@ public class DeviceWatcher : IDisposable
 
     public DeviceWatcher(IWmiQueryService? wmiService = null, ILogger<DeviceWatcher>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<DeviceWatcher>();
+        _logger = logger ?? NullLogger<DeviceWatcher>.Instance;
         _wmiService = wmiService ?? new WmiQueryService();
 
         _debounceTimer = new System.Timers.Timer(800); // 800ms 防抖
@@ -162,13 +162,13 @@ public class DeviceWatcher : IDisposable
         }
 
         // 3. 构建 分区 → 逻辑盘盘符 映射
-        //    从 Win32_LogicalDiskToPartition: Antecedent=逻辑盘路径, Dependent=分区路径
+        //    Win32_LogicalDiskToPartition: Antecedent=分区路径, Dependent=逻辑盘路径
         var partitionToDrive = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mapping in logicalDiskPartitionMappings)
         {
-            var driveLetter = ExtractDeviceId(mapping.Antecedent);
-            var partitionId = ExtractDeviceId(mapping.Dependent);
-            if (!string.IsNullOrEmpty(driveLetter) && !string.IsNullOrEmpty(partitionId))
+            var partitionId = ExtractDeviceId(mapping.Antecedent);
+            var driveLetter = ExtractDeviceId(mapping.Dependent);
+            if (!string.IsNullOrEmpty(partitionId) && !string.IsNullOrEmpty(driveLetter))
             {
                 partitionToDrive[partitionId] = driveLetter;
             }
@@ -215,14 +215,24 @@ public class DeviceWatcher : IDisposable
             // 对于 Fixed 类型，通过 WMI 判断是否为 USB 设备
             if (isFixed)
             {
-                // 查找盘符对应的分区，再找分区对应的磁盘
-                // 4a. 盘符 → 分区
-                if (partitionToDrive.TryGetValue(driveLetter, out var partitionId))
+                // 盘符 → 分区（反向查 partitionToDrive: 分区ID → 盘符）
+                // 先找到盘符对应的分区 ID
+                string? matchedPartition = null;
+                foreach (var kvp in partitionToDrive)
                 {
-                    // 4b. 分区 → 磁盘
+                    if (string.Equals(kvp.Value, driveLetter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchedPartition = kvp.Key;
+                        break;
+                    }
+                }
+
+                if (matchedPartition != null)
+                {
+                    // 分区 → 磁盘
                     foreach (var (diskId, partitions) in diskToPartitions)
                     {
-                        if (partitions.Contains(partitionId, StringComparer.OrdinalIgnoreCase))
+                        if (partitions.Contains(matchedPartition, StringComparer.OrdinalIgnoreCase))
                         {
                             isUsb = usbDiskIds.Contains(diskId);
                             if (diskInfoMap.TryGetValue(diskId, out var diskInfo))

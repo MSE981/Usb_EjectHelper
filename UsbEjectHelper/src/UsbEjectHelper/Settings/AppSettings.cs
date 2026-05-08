@@ -8,10 +8,14 @@ namespace UsbEjectHelper.Settings;
 /// </summary>
 public class AppSettings
 {
-    private static readonly string SettingsFilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "UsbEjectHelper",
-        "settings.json");
+    private static string? _settingsFilePathOverride;
+
+    private static string SettingsFilePath =>
+        _settingsFilePathOverride ??
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "UsbEjectHelper",
+            "settings.json");
 
     /// <summary>开机自启动</summary>
     public bool AutoStart { get; set; }
@@ -24,6 +28,15 @@ public class AppSettings
 
     /// <summary>日志脱敏（不记录完整用户路径）</summary>
     public bool EnablePrivacyMode { get; set; }
+
+    /// <summary>
+    /// 启用深度占用扫描（NT 系统级句柄枚举）。
+    /// 默认 false（仅用 Restart Manager，无任何信息披露顾虑）。
+    /// 开启后能发现普通进程持有的文件 / 目录句柄（与 Process Explorer / handle.exe
+    /// 同样的实现路径，仍是用户态 API），但会读取系统全量句柄表元数据并对同用户
+    /// 进程做 DuplicateHandle，可能被部分 EDR / 杀软按启发式规则标记可疑。
+    /// </summary>
+    public bool EnableDeepHandleScan { get; set; }
 
     /// <summary>单例锁</summary>
     private static readonly object _lock = new();
@@ -74,5 +87,13 @@ public class AppSettings
                 // 保存失败静默处理
             }
         }
+    }
+
+    /// <summary>
+    /// （仅测试用）覆盖设置文件路径，传 null 恢复默认。
+    /// </summary>
+    public static void OverrideFilePath(string? path)
+    {
+        _settingsFilePathOverride = path;
     }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32;
 
 namespace UsbEjectHelper.Settings;
@@ -9,15 +10,23 @@ namespace UsbEjectHelper.Settings;
 public class StartupManager
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "UsbEjectHelper";
+    private const string DefaultValueName = "UsbEjectHelper";
 
     private readonly ILogger<StartupManager> _logger;
     private readonly string _executablePath;
+    private readonly string _valueName;
 
     public StartupManager(ILogger<StartupManager>? logger = null)
+        : this(DefaultValueName, logger) { }
+
+    /// <summary>
+    /// 测试 / 集成场景的可定制构造：允许使用非默认的注册表值名，避免污染用户现有 Run 项。
+    /// </summary>
+    internal StartupManager(string valueName, ILogger<StartupManager>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<StartupManager>();
+        _logger = logger ?? NullLogger<StartupManager>.Instance;
         _executablePath = Environment.ProcessPath ?? Application.ExecutablePath;
+        _valueName = string.IsNullOrWhiteSpace(valueName) ? DefaultValueName : valueName;
     }
 
     /// <summary>
@@ -28,7 +37,7 @@ public class StartupManager
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            var value = key?.GetValue(ValueName) as string;
+            var value = key?.GetValue(_valueName) as string;
             return !string.IsNullOrEmpty(value);
         }
         catch (Exception ex)
@@ -54,7 +63,7 @@ public class StartupManager
 
             // 使用带引号的路径
             var command = $"\"{_executablePath}\"";
-            key.SetValue(ValueName, command, RegistryValueKind.String);
+            key.SetValue(_valueName, command, RegistryValueKind.String);
             _logger.LogInformation("开机自启动已启用: {Command}", command);
             return true;
         }
@@ -79,7 +88,7 @@ public class StartupManager
                 return false;
             }
 
-            key.DeleteValue(ValueName, throwOnMissingValue: false);
+            key.DeleteValue(_valueName, throwOnMissingValue: false);
             _logger.LogInformation("开机自启动已禁用。");
             return true;
         }

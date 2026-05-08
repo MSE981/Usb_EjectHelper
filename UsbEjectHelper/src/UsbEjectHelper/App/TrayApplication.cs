@@ -7,27 +7,30 @@ namespace UsbEjectHelper.App;
 
 /// <summary>
 /// 托盘生命周期管理 —— 托盘图标、右键菜单、IPC 监听、应用上下文。
+/// 服务由 <see cref="ServiceComposer"/> 注入，不在此类内部 new。
 /// </summary>
 public class TrayApplication : ApplicationContext
 {
+    private readonly ServiceComposer _services;
     private readonly ILogger<TrayApplication> _logger;
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _showMenuItem;
     private readonly ToolStripMenuItem _refreshMenuItem;
     private readonly ToolStripMenuItem _settingsMenuItem;
     private readonly ToolStripMenuItem _exitMenuItem;
+    private readonly DeviceNotificationWindow _deviceNotifyWindow;
     private MainWindow? _mainWindow;
     private CancellationTokenSource? _pipeCts;
+    private bool _isExiting;
 
-    public TrayApplication()
+    internal TrayApplication(ServiceComposer services)
     {
-        _logger = LoggerFactory.Create(b => b.AddConsole().AddDebug().SetMinimumLevel(LogLevel.Information))
-            .CreateLogger<TrayApplication>();
+        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _logger = services.LoggerFactory.CreateLogger<TrayApplication>();
 
-        // 构建托盘图标
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application, // MVP 使用系统默认图标
+            Icon = SystemIcons.Application,
             Text = "USB Eject Helper",
             Visible = true,
             ContextMenuStrip = new ContextMenuStrip()
@@ -52,25 +55,50 @@ public class TrayApplication : ApplicationContext
         _notifyIcon.ContextMenuStrip.Items.Add(new ToolStripSeparator());
         _notifyIcon.ContextMenuStrip.Items.Add(_exitMenuItem);
 
+        // 左键单击：toggle 主窗口（显示 ↔ 隐藏）。
+        // 右键由 ContextMenuStrip 自动处理。双击保留为"显示"以兼容惯用习惯。
+        _notifyIcon.MouseClick += OnTrayMouseClick;
         _notifyIcon.DoubleClick += OnShowWindow;
 
         _logger.LogInformation("托盘已初始化。");
 
-        // 启动 IPC 监听
-        StartIpcListener();
+        _deviceNotifyWindow = new DeviceNotificationWindow(
+            _services.DeviceWatcher,
+            _services.LoggerFactory.CreateLogger<DeviceNotificationWindow>());
 
-        // 默认启动后最小化到托盘（后续由设置控制）
-        ShowMainWindow();
+        StartIpcListener();
+        _services.DeviceWatcher.Start();
+
+        if (!_services.Settings.MinimizeToTrayOnStart)
+        {
+            ShowMainWindow();
+        }
+        else
+        {
+            _logger.LogInformation("启动后最小化到托盘（MinimizeToTrayOnStart=true）。");
+        }
     }
 
-    /// <summary>
-    /// 显示主窗口，若已存在则前置。
-    /// </summary>
+    /// <summary>左键 toggle 主窗口的可见性。</summary>
+    public void ToggleMainWindow()
+    {
+        if (_mainWindow == null || _mainWindow.IsDisposed || !_mainWindow.Visible)
+        {
+            ShowMainWindow();
+        }
+        else
+        {
+            _mainWindow.Hide();
+            _logger.LogInformation("主窗口已通过托盘点击隐藏到托盘。");
+        }
+    }
+
+    /// <summary>显示主窗口，若已存在则前置。</summary>
     public void ShowMainWindow()
     {
         if (_mainWindow == null || _mainWindow.IsDisposed)
         {
-            _mainWindow = new MainWindow(this);
+            _mainWindow = new MainWindow(this, _services);
             _mainWindow.FormClosed += (_, _) =>
             {
                 if (_mainWindow?.CloseToTray == false)
@@ -92,16 +120,21 @@ public class TrayApplication : ApplicationContext
         _logger.LogInformation("主窗口已显示。");
     }
 
-    /// <summary>
-    /// 退出应用程序。
-    /// </summary>
+    /// <summary>退出应用程序。</summary>
     public void ExitApplication()
     {
+        if (_isExiting) return;
+        _isExiting = true;
+
         _logger.LogInformation("正在退出…");
         _pipeCts?.Cancel();
         _pipeCts?.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _deviceNotifyWindow.Dispose();
+        _mainWindow?.Close();
+        _mainWindow?.Dispose();
+        _mainWindow = null;
         Application.Exit();
     }
 
@@ -112,6 +145,7 @@ public class TrayApplication : ApplicationContext
             _pipeCts?.Cancel();
             _pipeCts?.Dispose();
             _notifyIcon.Dispose();
+            _deviceNotifyWindow.Dispose();
             _mainWindow?.Dispose();
         }
         base.Dispose(disposing);
@@ -119,23 +153,30 @@ public class TrayApplication : ApplicationContext
 
     private void OnShowWindow(object? sender, EventArgs e) => ShowMainWindow();
 
+    private void OnTrayMouseClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left)
+        {
+            ToggleMainWindow();
+        }
+    }
+
     private void OnRefreshDevices(object? sender, EventArgs e)
     {
         _logger.LogInformation("设备刷新已请求。");
-        _mainWindow?.RefreshDevices();
+        _services.DeviceWatcher.RefreshDevices();
     }
 
     private void OnOpenSettings(object? sender, EventArgs e)
     {
         _logger.LogInformation("设置窗口已请求。");
+        ShowMainWindow();
         _mainWindow?.ShowSettings();
     }
 
     private void OnExit(object? sender, EventArgs e) => ExitApplication();
 
-    /// <summary>
-    /// 启动命名管道服务端，监听来自第二个实例的通知。
-    /// </summary>
+    /// <summary>启动命名管道服务端，监听来自第二个实例的通知。</summary>
     private void StartIpcListener()
     {
         _pipeCts = new CancellationTokenSource();
@@ -148,7 +189,7 @@ public class TrayApplication : ApplicationContext
                 try
                 {
                     using var server = new NamedPipeServerStream(
-                        "UsbEjectHelper_Pipe_{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}",
+                        AppConstants.PipeName,
                         PipeDirection.In,
                         maxNumberOfServerInstances: 1,
                         PipeTransmissionMode.Byte,
@@ -159,17 +200,9 @@ public class TrayApplication : ApplicationContext
                     await server.ReadAsync(buffer, token);
                     var msg = Encoding.UTF8.GetString(buffer).Trim('\0');
 
-                    if (msg == "SHOW")
+                    if (msg == AppConstants.IpcMessageShow)
                     {
-                        // 需要在 UI 线程执行
-                        if (_mainWindow != null && !_mainWindow.IsDisposed)
-                        {
-                            _mainWindow.BeginInvoke(() => ShowMainWindow());
-                        }
-                        else
-                        {
-                            BeginInvokeOnUiThread(ShowMainWindow);
-                        }
+                        BeginInvokeOnUiThread(ShowMainWindow);
                         _logger.LogInformation("通过 IPC 收到显示主窗口请求。");
                     }
                 }
@@ -192,6 +225,10 @@ public class TrayApplication : ApplicationContext
         if (syncContext != null)
         {
             syncContext.Post(_ => action(), null);
+        }
+        else if (_mainWindow is { IsDisposed: false })
+        {
+            _mainWindow.BeginInvoke(action);
         }
         else
         {
