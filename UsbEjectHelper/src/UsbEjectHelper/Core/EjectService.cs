@@ -26,7 +26,7 @@ public enum EjectResult
 /// <summary>
 /// 安全弹出服务 —— 调用 Windows API 尝试弹出可移动设备，失败时返回结构化原因。
 /// </summary>
-public class EjectService : IDisposable
+public class EjectService : IEjectService, IDisposable
 {
     private readonly ILogger<EjectService> _logger;
 

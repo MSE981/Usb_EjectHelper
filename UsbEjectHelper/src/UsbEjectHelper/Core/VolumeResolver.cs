@@ -6,7 +6,7 @@ namespace UsbEjectHelper.Core;
 /// <summary>
 /// 卷路径解析器 —— 盘符、卷 GUID、NT 设备路径之间的映射与规范化。
 /// </summary>
-public class VolumeResolver : IDisposable
+public class VolumeResolver : IVolumeResolver, IDisposable
 {
     private readonly ILogger<VolumeResolver> _logger;
 

@@ -34,7 +34,7 @@ public class ProcessInfo
 /// <summary>
 /// 进程检查器 —— 查询进程元数据、识别系统关键进程。
 /// </summary>
-public class ProcessInspector : IDisposable
+public class ProcessInspector : IProcessInspector, IDisposable
 {
     private readonly ILogger<ProcessInspector> _logger;
 

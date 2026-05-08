@@ -8,6 +8,8 @@ namespace UsbEjectHelper.Tests;
 /// </summary>
 public class ExportServiceTests
 {
+    private readonly IExportService _sut = new ExportService();
+
     [Fact]
     public void ExportDevices_ShouldReturnValidJson()
     {
@@ -16,7 +18,7 @@ public class ExportServiceTests
             new() { DriveLetter = "E:", VolumeLabel = "USB_DRIVE", FileSystem = "FAT32", TotalSize = 8L * 1024 * 1024 * 1024 }
         };
 
-        var json = ExportService.ExportDevices(devices);
+        var json = _sut.ExportDevices(devices);
         Assert.NotEmpty(json);
         Assert.Contains("USB_DRIVE", json);
         Assert.Contains("E:", json);
@@ -26,7 +28,7 @@ public class ExportServiceTests
     [Fact]
     public void ExportDevices_Empty_ShouldStillBeValid()
     {
-        var json = ExportService.ExportDevices(Array.Empty<DeviceInfo>());
+        var json = _sut.ExportDevices(Array.Empty<DeviceInfo>());
         Assert.NotEmpty(json);
         Assert.Contains("Devices", json);
     }
@@ -43,7 +45,7 @@ public class ExportServiceTests
             }
         };
 
-        var json = ExportService.ExportScanResults(summary);
+        var json = _sut.ExportScanResults(summary);
         Assert.NotEmpty(json);
         Assert.Contains("notepad.exe", json);
         Assert.Contains("1234", json);
@@ -54,9 +56,9 @@ public class ExportServiceTests
     public void ExportScanResults_Empty_ShouldShowLimitation()
     {
         var summary = new ScanSummary { TargetDrive = "E:" };
-        var json = ExportService.ExportScanResults(summary);
+        var json = _sut.ExportScanResults(summary);
         Assert.NotEmpty(json);
-        Assert.Contains("Restart Manager", json); // LimitationNote contains this
+        Assert.Contains("Restart Manager", json);
     }
 
     [Fact]
@@ -78,8 +80,8 @@ public class ExportServiceTests
             }
         };
 
-        var jsonNormal = ExportService.ExportScanResults(summary, privacyMode: false);
-        var jsonPrivate = ExportService.ExportScanResults(summary, privacyMode: true);
+        var jsonNormal = _sut.ExportScanResults(summary, privacyMode: false);
+        var jsonPrivate = _sut.ExportScanResults(summary, privacyMode: true);
 
         Assert.Contains("Alice", jsonNormal);
         Assert.DoesNotContain("Alice", jsonPrivate);

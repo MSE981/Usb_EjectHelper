@@ -1,17 +1,14 @@
 using System.Text.Json;
-using UsbEjectHelper.Core;
 
 namespace UsbEjectHelper.Core;
 
 /// <summary>
-/// 导出服务 —— JSON 格式导出设备列表、扫描结果等。
+/// 导出服务 —— JSON 格式导出设备列表与扫描结果，支持隐私脱敏。
 /// </summary>
-public class ExportService
+public class ExportService : IExportService
 {
-    /// <summary>
-    /// 导出设备列表为 JSON。
-    /// </summary>
-    public static string ExportDevices(IEnumerable<DeviceInfo> devices)
+    /// <inheritdoc />
+    public string ExportDevices(IEnumerable<DeviceInfo> devices)
     {
         var data = new
         {
@@ -34,10 +31,8 @@ public class ExportService
         return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    /// <summary>
-    /// 导出扫描结果为 JSON。
-    /// </summary>
-    public static string ExportScanResults(ScanSummary summary, bool privacyMode = false)
+    /// <inheritdoc />
+    public string ExportScanResults(ScanSummary summary, bool privacyMode = false)
     {
         var data = new
         {
@@ -61,9 +56,7 @@ public class ExportService
         return JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    /// <summary>
-    /// 脱敏路径 —— 仅保留盘符和文件名。
-    /// </summary>
+    /// <summary>路径脱敏 —— 仅保留盘符根和文件名。</summary>
     private static string SanitizePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return string.Empty;

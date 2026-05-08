@@ -13,10 +13,11 @@ internal sealed class ServiceComposer : IDisposable
     public ILoggerFactory LoggerFactory { get; }
     public IWmiQueryService WmiService { get; }
     public DeviceWatcher DeviceWatcher { get; }
-    public VolumeResolver VolumeResolver { get; }
-    public EjectService EjectService { get; }
-    public ProcessInspector ProcessInspector { get; }
-    public HandleScanner HandleScanner { get; }
+    public IVolumeResolver VolumeResolver { get; }
+    public IEjectService EjectService { get; }
+    public IProcessInspector ProcessInspector { get; }
+    public IHandleScanner HandleScanner { get; }
+    public IExportService ExportService { get; }
     public AppSettings Settings { get; }
     public StartupManager StartupManager { get; }
 
@@ -26,10 +27,11 @@ internal sealed class ServiceComposer : IDisposable
         ILoggerFactory loggerFactory,
         IWmiQueryService wmiService,
         DeviceWatcher deviceWatcher,
-        VolumeResolver volumeResolver,
-        EjectService ejectService,
-        ProcessInspector processInspector,
-        HandleScanner handleScanner,
+        IVolumeResolver volumeResolver,
+        IEjectService ejectService,
+        IProcessInspector processInspector,
+        IHandleScanner handleScanner,
+        IExportService exportService,
         AppSettings settings,
         StartupManager startupManager)
     {
@@ -40,6 +42,7 @@ internal sealed class ServiceComposer : IDisposable
         EjectService = ejectService;
         ProcessInspector = processInspector;
         HandleScanner = handleScanner;
+        ExportService = exportService;
         Settings = settings;
         StartupManager = startupManager;
     }
@@ -61,6 +64,7 @@ internal sealed class ServiceComposer : IDisposable
             volumeResolver,
             processInspector,
             loggerFactory.CreateLogger<HandleScanner>());
+        var exportService = new ExportService();
         var settings = AppSettings.Load();
         var startupManager = new StartupManager(loggerFactory.CreateLogger<StartupManager>());
 
@@ -72,6 +76,7 @@ internal sealed class ServiceComposer : IDisposable
             ejectService,
             processInspector,
             handleScanner,
+            exportService,
             settings,
             startupManager);
     }
@@ -83,10 +88,10 @@ internal sealed class ServiceComposer : IDisposable
 
         // 按创建逆序释放（DeviceWatcher 持有 WmiService 引用，先释放消费者）
         DeviceWatcher.Dispose();
-        HandleScanner.Dispose();
-        EjectService.Dispose();
-        ProcessInspector.Dispose();
-        VolumeResolver.Dispose();
+        if (HandleScanner is IDisposable hs) hs.Dispose();
+        if (EjectService is IDisposable es) es.Dispose();
+        if (ProcessInspector is IDisposable pi) pi.Dispose();
+        if (VolumeResolver is IDisposable vr) vr.Dispose();
         if (WmiService is IDisposable wmiDisposable) wmiDisposable.Dispose();
     }
 }

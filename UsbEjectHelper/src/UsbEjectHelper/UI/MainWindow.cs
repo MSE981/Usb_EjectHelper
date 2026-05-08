@@ -429,11 +429,11 @@ public class MainWindow : Form
                             ? _deviceListView.SelectedItems[0].SubItems[0].Text : "未知",
                         Results = results
                     };
-                    json = ExportService.ExportScanResults(summary, _services.Settings.EnablePrivacyMode);
+                    json = _services.ExportService.ExportScanResults(summary, _services.Settings.EnablePrivacyMode);
                 }
                 else
                 {
-                    json = ExportService.ExportDevices(devices!);
+                    json = _services.ExportService.ExportDevices(devices!);
                 }
 
                 File.WriteAllText(sfd.FileName, json, Encoding.UTF8);
