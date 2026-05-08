@@ -49,12 +49,13 @@ public class ScanSummary
     public List<HandleScanResult> Results { get; init; } = new();
 
     /// <summary>使用的扫描方法</summary>
-    public string Method { get; set; } = "NT Handle Scan";
+    public string Method { get; set; } = "Restart Manager (Safe Mode)";
 
     /// <summary>扫描方法局限性说明（当结果为空时展示）</summary>
     public string LimitationNote => Results.Count == 0
-        ? "扫描完成但未发现占用：可能是其他用户上下文（如 SYSTEM/管理员）的进程持有句柄、" +
-          "或目标已实际释放。可尝试以管理员身份运行本程序后再扫描。"
+        ? "扫描完成但未发现占用。安全模式下仅能发现注册了 RM 的应用 / 服务（资源管理器、" +
+          "Office 等）；如果记事本 / 图片查看器 / 命令行打开的文件没被发现，可在设置里开启" +
+          "\"深度扫描\"或以管理员身份重启再试。"
         : string.Empty;
 
     /// <summary>是否扫描到占用</summary>
@@ -81,12 +82,19 @@ public class HandleScanner : IHandleScanner, IDisposable
     }
 
     /// <summary>
-    /// 扫描指定盘符的占用情况。
+    /// 安全模式扫描（仅 Restart Manager）。
+    /// 不读系统全量句柄表、不跨进程 DuplicateHandle。无任何信息披露顾虑。
+    /// </summary>
+    public ScanSummary Scan(string driveLetter, CancellationToken cancellationToken = default) =>
+        Scan(driveLetter, allowDeepScan: false, cancellationToken);
+
+    /// <summary>
+    /// 显式选择是否允许深度扫描（NT 系统级句柄枚举）。
     /// </summary>
     /// <param name="driveLetter">盘符，如 "E:"</param>
+    /// <param name="allowDeepScan">true=允许 NT 路径；false=只用 RM 安全模式。</param>
     /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>扫描摘要</returns>
-    public ScanSummary Scan(string driveLetter, CancellationToken cancellationToken = default)
+    public ScanSummary Scan(string driveLetter, bool allowDeepScan, CancellationToken cancellationToken = default)
     {
         var normalized = VolumeResolver.NormalizeDriveLetter(driveLetter);
         if (string.IsNullOrEmpty(normalized))
@@ -101,7 +109,8 @@ public class HandleScanner : IHandleScanner, IDisposable
             };
         }
 
-        _logger.LogInformation("开始扫描 {Drive} 的占用…", normalized);
+        _logger.LogInformation("开始扫描 {Drive} 的占用… 模式={Mode}", normalized,
+            allowDeepScan ? "深度（NT 句柄枚举）" : "安全（仅 RM）");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var summary = new ScanSummary
@@ -110,8 +119,35 @@ public class HandleScanner : IHandleScanner, IDisposable
             Results = new List<HandleScanResult>()
         };
 
-        // 主路径：NT 系统级句柄枚举（覆盖普通进程持有的文件 / 目录句柄）。
-        // 失败 / 0 结果时退回到 Restart Manager（覆盖部分注册了 RM 的应用 / 服务）。
+        // 安全模式：完全跳过 NT 路径，只用 Restart Manager。
+        // 这是默认行为；用户必须在设置里显式开启深度扫描才走 NT 全量句柄枚举。
+        if (!allowDeepScan)
+        {
+            try
+            {
+                var rmResults = ScanViaRestartManager(normalized, cancellationToken);
+                summary.Results.AddRange(rmResults);
+                summary.Method = "Restart Manager (Safe Mode)";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Restart Manager 扫描异常。");
+                summary.Results.Add(new HandleScanResult
+                {
+                    ProcessName = "扫描错误",
+                    FilePath = ex.Message,
+                    ErrorState = "ScanException"
+                });
+            }
+
+            sw.Stop();
+            _logger.LogInformation(
+                "扫描 {Drive} 完成: {Count} 个占用, 耗时 {Elapsed}ms, 方法={Method}",
+                normalized, summary.Results.Count(r => string.IsNullOrEmpty(r.ErrorState)), sw.ElapsedMilliseconds, summary.Method);
+            return summary;
+        }
+
+        // 深度模式：NT 系统级句柄枚举主路径，RM 兜底。
         bool ntFailed = false;
         try
         {
@@ -125,9 +161,8 @@ public class HandleScanner : IHandleScanner, IDisposable
             ntFailed = true;
         }
 
-        // 注意：NT 路径正常返回（即使 0 项）就不再触发 RM。
-        // RM 的 RmGetList 在系统盘上可能跑数十秒，且取消令牌无法穿透，会让用户感觉卡住。
-        // 仅当 NT 路径自己抛异常时才回退 RM，作为兼容性兜底。
+        // RM 的 RmGetList 在系统盘上可能跑数十秒，且取消令牌无法穿透；
+        // 仅当 NT 路径自己抛异常时才退回 RM，作为兼容性兜底。
         if (ntFailed && !cancellationToken.IsCancellationRequested)
         {
             try

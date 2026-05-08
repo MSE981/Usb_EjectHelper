@@ -29,6 +29,15 @@ public class AppSettings
     /// <summary>日志脱敏（不记录完整用户路径）</summary>
     public bool EnablePrivacyMode { get; set; }
 
+    /// <summary>
+    /// 启用深度占用扫描（NT 系统级句柄枚举）。
+    /// 默认 false（仅用 Restart Manager，无任何信息披露顾虑）。
+    /// 开启后能发现普通进程持有的文件 / 目录句柄（与 Process Explorer / handle.exe
+    /// 同样的实现路径，仍是用户态 API），但会读取系统全量句柄表元数据并对同用户
+    /// 进程做 DuplicateHandle，可能被部分 EDR / 杀软按启发式规则标记可疑。
+    /// </summary>
+    public bool EnableDeepHandleScan { get; set; }
+
     /// <summary>单例锁</summary>
     private static readonly object _lock = new();
 

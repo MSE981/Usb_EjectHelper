@@ -29,6 +29,8 @@ public class SettingsTests : IDisposable
         Assert.True(settings.MinimizeToTrayOnStart);
         Assert.True(settings.CloseToTray);
         Assert.False(settings.EnablePrivacyMode);
+        // 默认不启用深度扫描——安全模式优先
+        Assert.False(settings.EnableDeepHandleScan);
     }
 
     [Fact]
@@ -39,7 +41,8 @@ public class SettingsTests : IDisposable
             AutoStart = true,
             MinimizeToTrayOnStart = false,
             CloseToTray = true,
-            EnablePrivacyMode = true
+            EnablePrivacyMode = true,
+            EnableDeepHandleScan = true
         };
 
         settings.Save();
@@ -51,6 +54,7 @@ public class SettingsTests : IDisposable
         Assert.Equal(settings.MinimizeToTrayOnStart, loaded.MinimizeToTrayOnStart);
         Assert.Equal(settings.CloseToTray, loaded.CloseToTray);
         Assert.Equal(settings.EnablePrivacyMode, loaded.EnablePrivacyMode);
+        Assert.Equal(settings.EnableDeepHandleScan, loaded.EnableDeepHandleScan);
     }
 
     [Fact]

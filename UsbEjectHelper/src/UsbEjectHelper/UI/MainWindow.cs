@@ -294,7 +294,9 @@ public class MainWindow : Form
 
             SetActionButtonsEnabled(false);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, cts.Token));
+            // 安全 / 深度模式由用户在设置里显式选择；默认安全（仅 RM）。
+            var allowDeep = _services.Settings.EnableDeepHandleScan;
+            var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, allowDeep, cts.Token));
 
             _resultListView.Items.Clear();
 

@@ -107,10 +107,28 @@ public class HandleScannerTests
     }
 
     /// <summary>
-    /// NT 扫描器契约：扫描不存在的盘符应快速返回（带超时保护后即使遍历 15 万系统句柄也只需百毫秒级）。
+    /// 默认安全模式契约：不传 allowDeepScan，应仅用 Restart Manager，方法名带 "Safe Mode"。
     /// </summary>
     [Fact]
-    public void Scan_NonExistentDrive_ShouldReturnQuicklyWithNtMethod()
+    public void Scan_DefaultMode_ShouldUseSafeMode()
+    {
+        var pi = new ProcessInspector();
+        var vr = new VolumeResolver();
+        using var sut = new HandleScanner(vr, pi, NullLogger<HandleScanner>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var summary = sut.Scan("Z:", cts.Token);
+
+        // 默认走 RM 安全模式，不应该出现 NT
+        Assert.DoesNotContain("NT", summary.Method);
+        Assert.Contains("Safe Mode", summary.Method);
+    }
+
+    /// <summary>
+    /// 深度模式契约：扫描不存在的盘符应快速返回（带超时保护后即使遍历 15 万系统句柄也只需百毫秒级）。
+    /// </summary>
+    [Fact]
+    public void Scan_DeepMode_NonExistentDrive_ShouldReturnQuicklyWithNtMethod()
     {
         var pi = new ProcessInspector();
         var vr = new VolumeResolver();
@@ -118,7 +136,7 @@ public class HandleScannerTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var summary = sut.Scan("Z:", cts.Token);
+        var summary = sut.Scan("Z:", allowDeepScan: true, cts.Token);
         sw.Stop();
 
         Assert.Contains("NT", summary.Method);
@@ -127,12 +145,12 @@ public class HandleScannerTests
     }
 
     /// <summary>
-    /// 集成测试：本进程持有 %TEMP% 的一个文件句柄，扫描该盘应找到本进程 PID。
+    /// 深度模式集成测试：本进程持有 %TEMP% 的一个文件句柄，扫描该盘应找到本进程 PID。
     /// 这是 E-2 修复的核心契约：用 NtQuerySystemInformation 取代 RM 后，
     /// 普通 FileShare.ReadWrite 打开的文件也能被发现。
     /// </summary>
     [Fact]
-    public void ScanViaNtHandles_FindsCurrentProcessHoldingFile()
+    public void Scan_DeepMode_FindsCurrentProcessHoldingFile()
     {
         var pi = new ProcessInspector();
         var vr = new VolumeResolver();
@@ -150,7 +168,7 @@ public class HandleScannerTests
             fs.Flush();
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            var summary = sut.Scan(driveOfTemp, cts.Token);
+            var summary = sut.Scan(driveOfTemp, allowDeepScan: true, cts.Token);
 
             var ourPid = Environment.ProcessId;
             Assert.Contains(summary.Results, r => r.Pid == ourPid);

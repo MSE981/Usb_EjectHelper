@@ -33,8 +33,8 @@ public class ScanSummaryTests
     {
         var summary = new ScanSummary();
         Assert.NotEmpty(summary.LimitationNote);
-        // 必须给出可执行的下一步建议（PR8 起从"RM 局限性"改为"提权 / 跨用户提示"）
-        Assert.Contains("管理员", summary.LimitationNote);
+        // 安全模式下空结果应给出"开启深度扫描或提权"的可执行建议
+        Assert.Contains("深度扫描", summary.LimitationNote);
     }
 
     [Fact]
@@ -51,10 +51,10 @@ public class ScanSummaryTests
     }
 
     [Fact]
-    public void ScanSummary_DefaultMethod_ShouldBeNtHandleScan()
+    public void ScanSummary_DefaultMethod_ShouldBeRestartManagerSafeMode()
     {
-        // PR8 起默认扫描方法升级为 NT Handle Scan，RM 仅作为后备
+        // PR8 起默认安全模式：仅 Restart Manager；NT 句柄枚举只有用户显式开启时才走
         var summary = new ScanSummary();
-        Assert.Equal("NT Handle Scan", summary.Method);
+        Assert.Equal("Restart Manager (Safe Mode)", summary.Method);
     }
 }
