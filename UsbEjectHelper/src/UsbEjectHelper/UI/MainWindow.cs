@@ -215,12 +215,13 @@ public class MainWindow : Form
             MessageBox.Show(message, "弹出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _services.DeviceWatcher.RefreshDevices();
         }
-        else if (result == EjectResult.DeviceBusy)
+        else if (result == EjectResult.DeviceBusy || result == EjectResult.DeviceBusyVetoed)
         {
-            SetStatus($"弹出失败：{drive} 正忙。");
+            var title = result == EjectResult.DeviceBusyVetoed ? "弹出被拒绝" : "弹出失败";
+            SetStatus($"{title}：{drive} 正忙。");
             var choice = MessageBox.Show(
                 $"{message}\n\n是否立即扫描占用进程？",
-                "弹出失败",
+                title,
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning);
 
