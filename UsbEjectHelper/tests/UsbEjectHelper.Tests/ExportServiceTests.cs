@@ -87,4 +87,42 @@ public class ExportServiceTests
         Assert.DoesNotContain("Alice", jsonPrivate);
         Assert.Contains("secret.txt", jsonNormal);
     }
+
+    /// <summary>
+    /// 集成测试：把导出 JSON 真正写到磁盘上，验证文件存在、内容可被 JsonDocument 解析、关键字段就位。
+    /// 模拟 MainWindow.OnExport 的整条路径（除了 SaveFileDialog）。
+    /// </summary>
+    [Fact]
+    public void ExportToDisk_ShouldProduceParseableJson()
+    {
+        var summary = new ScanSummary
+        {
+            TargetDrive = "E:",
+            Results = new List<HandleScanResult>
+            {
+                new() { Pid = 1234, ProcessName = "notepad.exe", FilePath = @"E:\test.txt", DetectionMethod = "Restart Manager" }
+            }
+        };
+        var path = Path.Combine(Path.GetTempPath(), $"UsbEjectHelper_AutoExport_{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, _sut.ExportScanResults(summary), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+            Assert.True(File.Exists(path));
+            var bytes = File.ReadAllBytes(path);
+            Assert.True(bytes.Length > 0);
+
+            using var doc = System.Text.Json.JsonDocument.Parse(bytes);
+            var root = doc.RootElement;
+            Assert.Equal("ScanResults", root.GetProperty("Type").GetString());
+            Assert.Equal("E:", root.GetProperty("TargetDrive").GetString());
+            var first = root.GetProperty("Results").EnumerateArray().First();
+            Assert.Equal(1234, first.GetProperty("Pid").GetInt32());
+            Assert.Equal("notepad.exe", first.GetProperty("ProcessName").GetString());
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
 }

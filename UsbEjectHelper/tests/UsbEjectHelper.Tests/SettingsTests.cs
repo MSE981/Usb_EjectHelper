@@ -60,4 +60,45 @@ public class SettingsTests : IDisposable
         var exception = Record.Exception(() => mgr.IsStartupEnabled());
         Assert.Null(exception);
     }
+
+    /// <summary>
+    /// 集成测试：用唯一 GUID 值名走真实 HKCU 写入 → 读回 → 删除的完整路径，
+    /// 不会与用户现有的 "UsbEjectHelper" Run 项发生碰撞。
+    /// </summary>
+    [Fact]
+    public void StartupManager_EnableThenDisable_RealRegistry_RoundTrips()
+    {
+        var uniqueValueName = "UsbEjectHelper_AutoTest_" + Guid.NewGuid().ToString("N");
+        var mgrType = typeof(UsbEjectHelper.Settings.StartupManager);
+        var ctor = mgrType.GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            new[] { typeof(string), typeof(Microsoft.Extensions.Logging.ILogger<UsbEjectHelper.Settings.StartupManager>) });
+        Assert.NotNull(ctor);
+
+        var mgr = (UsbEjectHelper.Settings.StartupManager)ctor!.Invoke(new object?[] { uniqueValueName, null });
+
+        Assert.False(mgr.IsStartupEnabled(), "唯一值名启动前不应存在");
+
+        try
+        {
+            Assert.True(mgr.EnableStartup(), "EnableStartup 应返回 true");
+            Assert.True(mgr.IsStartupEnabled(), "EnableStartup 后必须能读回");
+
+            using var key = Microsoft.Win32.Registry.CurrentUser
+                .OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: false);
+            var value = key?.GetValue(uniqueValueName) as string;
+            Assert.NotNull(value);
+            Assert.StartsWith("\"", value);
+            Assert.EndsWith("\"", value);
+
+            Assert.True(mgr.DisableStartup(), "DisableStartup 应返回 true");
+            Assert.False(mgr.IsStartupEnabled(), "DisableStartup 后应当读不到");
+        }
+        finally
+        {
+            using var cleanup = Microsoft.Win32.Registry.CurrentUser
+                .OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+            cleanup?.DeleteValue(uniqueValueName, throwOnMissingValue: false);
+        }
+    }
 }
