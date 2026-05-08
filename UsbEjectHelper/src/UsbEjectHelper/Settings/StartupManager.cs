@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32;
 
 namespace UsbEjectHelper.Settings;
@@ -16,7 +17,7 @@ public class StartupManager
 
     public StartupManager(ILogger<StartupManager>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<StartupManager>();
+        _logger = logger ?? NullLogger<StartupManager>.Instance;
         _executablePath = Environment.ProcessPath ?? Application.ExecutablePath;
     }
 

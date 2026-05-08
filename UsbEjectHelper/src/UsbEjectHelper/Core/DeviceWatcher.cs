@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32.SafeHandles;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace UsbEjectHelper.Core;
@@ -32,7 +32,7 @@ public class DeviceWatcher : IDisposable
 
     public DeviceWatcher(IWmiQueryService? wmiService = null, ILogger<DeviceWatcher>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<DeviceWatcher>();
+        _logger = logger ?? NullLogger<DeviceWatcher>.Instance;
         _wmiService = wmiService ?? new WmiQueryService();
 
         _debounceTimer = new System.Timers.Timer(800); // 800ms 防抖

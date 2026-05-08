@@ -8,26 +8,25 @@ namespace UsbEjectHelper.UI;
 
 /// <summary>
 /// 主窗口 —— 设备列表、操作按钮、占用结果表格、状态栏。
+/// 服务统一由 <see cref="ServiceComposer"/> 注入；本窗口不创建也不释放服务。
 /// </summary>
 public class MainWindow : Form
 {
     private readonly TrayApplication _trayApp;
+    private readonly ServiceComposer _services;
     private readonly ILogger<MainWindow> _logger;
 
-    // 设备列表
     private readonly ListView _deviceListView;
     private readonly ColumnHeader _driveCol;
     private readonly ColumnHeader _labelCol;
     private readonly ColumnHeader _fsCol;
     private readonly ColumnHeader _capacityCol;
 
-    // 按钮
     private readonly Button _ejectButton;
     private readonly Button _scanButton;
     private readonly Button _refreshButton;
     private readonly Button _exportButton;
 
-    // 占用结果
     private readonly ListView _resultListView;
     private readonly ColumnHeader _pidCol;
     private readonly ColumnHeader _procNameCol;
@@ -35,62 +34,34 @@ public class MainWindow : Form
     private readonly ColumnHeader _filePathCol;
     private readonly ColumnHeader _methodCol;
 
-    // 状态栏
     private readonly StatusStrip _statusStrip;
     private readonly ToolStripStatusLabel _statusLabel;
 
-    // 设备监视器
-    private readonly DeviceWatcher _deviceWatcher;
-
-    // 核心服务
-    private readonly EjectService _ejectService;
-    private readonly HandleScanner _handleScanner;
-    private readonly VolumeResolver _volumeResolver;
-
-    // 设置
-    private readonly AppSettings _appSettings;
-    private readonly StartupManager _startupManager;
-
-    // 设置相关面板
     private readonly Panel _settingsPanel;
     private CheckBox _autoStartCheckBox = null!;
     private CheckBox _minimizeToTrayCheckBox = null!;
     private CheckBox _closeToTrayCheckBox = null!;
 
-    /// <summary>
-    /// 关闭窗口时是否最小化到托盘（true），还是退出程序（false）。
-    /// </summary>
+    private readonly EventHandler<List<DeviceInfo>> _devicesChangedHandler;
+
+    /// <summary>关闭窗口时是否最小化到托盘（true），还是退出程序（false）。</summary>
     public bool CloseToTray { get; private set; } = true;
 
-    /// <summary>
-    /// 设备刷新请求事件。
-    /// </summary>
+    /// <summary>设备刷新请求事件。</summary>
     public event EventHandler? DeviceRefreshRequested;
 
-    public MainWindow(TrayApplication trayApp)
+    internal MainWindow(TrayApplication trayApp, ServiceComposer services)
     {
-        _trayApp = trayApp;
-        _logger = LoggerFactory.Create(b => b.AddConsole().AddDebug().SetMinimumLevel(LogLevel.Information))
-            .CreateLogger<MainWindow>();
+        _trayApp = trayApp ?? throw new ArgumentNullException(nameof(trayApp));
+        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _logger = services.LoggerFactory.CreateLogger<MainWindow>();
 
-        _deviceWatcher = new DeviceWatcher();
-        _deviceWatcher.DevicesChanged += OnDevicesChanged;
-        _deviceWatcher.Start();
-
-        _volumeResolver = new VolumeResolver();
-        _ejectService = new EjectService();
-        _handleScanner = new HandleScanner(_volumeResolver, new ProcessInspector());
-
-        // 加载设置
-        _appSettings = AppSettings.Load();
-        _startupManager = new StartupManager();
-        CloseToTray = _appSettings.CloseToTray;
+        CloseToTray = _services.Settings.CloseToTray;
 
         Text = "USB Eject Helper";
         Size = new Size(800, 600);
         StartPosition = FormStartPosition.CenterScreen;
 
-        // ---- 设备列表标签 ----
         var deviceLabel = new Label
         {
             Text = "可移动设备：",
@@ -98,7 +69,6 @@ public class MainWindow : Form
             AutoSize = true
         };
 
-        // ---- 设备列表 ----
         _deviceListView = new ListView
         {
             Location = new Point(12, 32),
@@ -113,7 +83,6 @@ public class MainWindow : Form
         _fsCol = _deviceListView.Columns.Add("文件系统", 80);
         _capacityCol = _deviceListView.Columns.Add("容量", 120);
 
-        // ---- 按钮面板 ----
         _ejectButton = new Button { Text = "弹出 (&E)", Location = new Point(12, 200), Size = new Size(90, 30) };
         _scanButton = new Button { Text = "扫描占用 (&S)", Location = new Point(110, 200), Size = new Size(90, 30) };
         _refreshButton = new Button { Text = "刷新 (&R)", Location = new Point(208, 200), Size = new Size(90, 30) };
@@ -124,7 +93,6 @@ public class MainWindow : Form
         _refreshButton.Click += (_, _) => DeviceRefreshRequested?.Invoke(this, EventArgs.Empty);
         _exportButton.Click += OnExport;
 
-        // ---- 占用结果标签 ----
         var resultLabel = new Label
         {
             Text = "占用结果：",
@@ -132,7 +100,6 @@ public class MainWindow : Form
             AutoSize = true
         };
 
-        // ---- 占用结果列表 ----
         _resultListView = new ListView
         {
             Location = new Point(12, 260),
@@ -147,16 +114,13 @@ public class MainWindow : Form
         _filePathCol = _resultListView.Columns.Add("占用路径", 200);
         _methodCol = _resultListView.Columns.Add("检测方法", 80);
 
-        // ---- 状态栏 ----
         _statusStrip = new StatusStrip();
         _statusLabel = new ToolStripStatusLabel("就绪");
         _statusStrip.Items.Add(_statusLabel);
 
-        // ---- 设置面板（初始隐藏） ----
         _settingsPanel = CreateSettingsPanel();
         _settingsPanel.Visible = false;
 
-        // ---- 布局 ----
         Controls.AddRange(new Control[]
         {
             deviceLabel, _deviceListView,
@@ -166,15 +130,16 @@ public class MainWindow : Form
             _statusStrip
         });
 
-        // 窗口关闭事件
         FormClosing += OnFormClosing;
+
+        _devicesChangedHandler = OnDevicesChanged;
+        _services.DeviceWatcher.DevicesChanged += _devicesChangedHandler;
+        OnDevicesChanged(this, _services.DeviceWatcher.Devices.ToList());
 
         _logger.LogInformation("主窗口已创建。");
     }
 
-    /// <summary>
-    /// 刷新设备列表（来自外部调用，需 UI 线程）。
-    /// </summary>
+    /// <summary>刷新设备列表（来自外部调用，需 UI 线程）。</summary>
     public void RefreshDevices()
     {
         if (InvokeRequired)
@@ -183,25 +148,20 @@ public class MainWindow : Form
             return;
         }
 
-        _deviceWatcher.RefreshDevices();
+        _services.DeviceWatcher.RefreshDevices();
     }
 
-    /// <summary>
-    /// 处理 WM_DEVICECHANGE 消息，转发给 DeviceWatcher。
-    /// </summary>
+    /// <summary>处理 WM_DEVICECHANGE 消息，转发给 DeviceWatcher。</summary>
     protected override void WndProc(ref Message m)
     {
         const int WM_DEVICECHANGE = 0x0219;
         if (m.Msg == WM_DEVICECHANGE)
         {
-            _deviceWatcher.HandleDeviceChangeMessage(m.Msg, m.WParam, m.LParam);
+            _services.DeviceWatcher.HandleDeviceChangeMessage(m.Msg, m.WParam, m.LParam);
         }
         base.WndProc(ref m);
     }
 
-    /// <summary>
-    /// 设备列表变化回调 —— 更新 UI 设备列表。
-    /// </summary>
     private void OnDevicesChanged(object? sender, List<DeviceInfo> devices)
     {
         if (InvokeRequired)
@@ -235,9 +195,7 @@ public class MainWindow : Form
         SetStatus($"已检测到 {devices.Count} 个可弹出设备。");
     }
 
-    /// <summary>
-    /// 显示/隐藏设置面板。
-    /// </summary>
+    /// <summary>显示/隐藏设置面板。</summary>
     public void ShowSettings()
     {
         if (InvokeRequired)
@@ -253,9 +211,7 @@ public class MainWindow : Form
         }
     }
 
-    /// <summary>
-    /// 设置状态栏文本。
-    /// </summary>
+    /// <summary>设置状态栏文本。</summary>
     public void SetStatus(string text)
     {
         if (InvokeRequired)
@@ -265,36 +221,6 @@ public class MainWindow : Form
         }
 
         _statusLabel.Text = text;
-    }
-
-    /// <summary>
-    /// 填充设备列表。
-    /// </summary>
-    public void PopulateDevices(List<ListViewItem> items)
-    {
-        if (InvokeRequired)
-        {
-            BeginInvoke(() => PopulateDevices(items));
-            return;
-        }
-
-        _deviceListView.Items.Clear();
-        _deviceListView.Items.AddRange(items.ToArray());
-    }
-
-    /// <summary>
-    /// 填充占用结果。
-    /// </summary>
-    public void PopulateScanResults(List<ListViewItem> items)
-    {
-        if (InvokeRequired)
-        {
-            BeginInvoke(() => PopulateScanResults(items));
-            return;
-        }
-
-        _resultListView.Items.Clear();
-        _resultListView.Items.AddRange(items.ToArray());
     }
 
     private Panel CreateSettingsPanel()
@@ -358,20 +284,20 @@ public class MainWindow : Form
 
     private void LoadSettings()
     {
-        _autoStartCheckBox.Checked = _startupManager.IsStartupEnabled();
-        _minimizeToTrayCheckBox.Checked = _appSettings.MinimizeToTrayOnStart;
-        _closeToTrayCheckBox.Checked = _appSettings.CloseToTray;
+        _autoStartCheckBox.Checked = _services.StartupManager.IsStartupEnabled();
+        _minimizeToTrayCheckBox.Checked = _services.Settings.MinimizeToTrayOnStart;
+        _closeToTrayCheckBox.Checked = _services.Settings.CloseToTray;
     }
 
     private void OnSaveSettings(object? sender, EventArgs e)
     {
         CloseToTray = _closeToTrayCheckBox.Checked;
-        _appSettings.AutoStart = _autoStartCheckBox.Checked;
-        _appSettings.MinimizeToTrayOnStart = _minimizeToTrayCheckBox.Checked;
-        _appSettings.CloseToTray = _closeToTrayCheckBox.Checked;
-        _appSettings.Save();
+        _services.Settings.AutoStart = _autoStartCheckBox.Checked;
+        _services.Settings.MinimizeToTrayOnStart = _minimizeToTrayCheckBox.Checked;
+        _services.Settings.CloseToTray = _closeToTrayCheckBox.Checked;
+        _services.Settings.Save();
 
-        _startupManager.ToggleStartup(_autoStartCheckBox.Checked);
+        _services.StartupManager.ToggleStartup(_autoStartCheckBox.Checked);
 
         SetStatus("设置已保存。");
         _logger.LogInformation("用户设置已保存：CloseToTray={CloseToTray}, AutoStart={AutoStart}",
@@ -390,13 +316,13 @@ public class MainWindow : Form
         SetStatus($"正在尝试弹出 {drive}…");
         _logger.LogInformation("弹出请求：{Drive}", drive);
 
-        var (result, message) = await Task.Run(() => _ejectService.TryEject(drive));
+        var (result, message) = await Task.Run(() => _services.EjectService.TryEject(drive));
 
         if (result == EjectResult.Success)
         {
             SetStatus(message);
             MessageBox.Show(message, "弹出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            _deviceWatcher.RefreshDevices();
+            _services.DeviceWatcher.RefreshDevices();
         }
         else if (result == EjectResult.DeviceBusy)
         {
@@ -432,7 +358,7 @@ public class MainWindow : Form
         _logger.LogInformation("扫描请求：{Drive}", drive);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var summary = await Task.Run(() => _handleScanner.Scan(drive, cts.Token));
+        var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, cts.Token));
 
         _resultListView.Items.Clear();
 
@@ -476,19 +402,16 @@ public class MainWindow : Form
         {
             try
             {
-                // 收集当前设备信息
                 var devices = _deviceListView.Items
                     .OfType<ListViewItem>()
                     .Select(item => item.Tag as DeviceInfo)
                     .Where(d => d != null)
                     .ToList();
 
-                // 如果有扫描结果，导出扫描结果；否则导出设备列表
                 string json;
                 if (_resultListView.Items.Count > 0 &&
                     _resultListView.Items[0].SubItems[0].Text != "--")
                 {
-                    // 构建简化的 ScanSummary 用于导出
                     var results = _resultListView.Items
                         .OfType<ListViewItem>()
                         .Select(item => new HandleScanResult
@@ -506,7 +429,7 @@ public class MainWindow : Form
                             ? _deviceListView.SelectedItems[0].SubItems[0].Text : "未知",
                         Results = results
                     };
-                    json = ExportService.ExportScanResults(summary, _appSettings.EnablePrivacyMode);
+                    json = ExportService.ExportScanResults(summary, _services.Settings.EnablePrivacyMode);
                 }
                 else
                 {
@@ -540,10 +463,7 @@ public class MainWindow : Form
     {
         if (disposing)
         {
-            _deviceWatcher?.Dispose();
-            _handleScanner?.Dispose();
-            _ejectService?.Dispose();
-            _volumeResolver?.Dispose();
+            _services.DeviceWatcher.DevicesChanged -= _devicesChangedHandler;
         }
         base.Dispose(disposing);
     }

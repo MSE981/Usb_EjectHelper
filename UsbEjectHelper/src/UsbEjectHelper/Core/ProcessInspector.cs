@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 
 namespace UsbEjectHelper.Core;
@@ -36,7 +37,6 @@ public class ProcessInfo
 public class ProcessInspector : IDisposable
 {
     private readonly ILogger<ProcessInspector> _logger;
-    private readonly ILoggerFactory? _ownedFactory;
 
     /// <summary>
     /// 系统关键进程名单（不分大小写）。
@@ -61,15 +61,7 @@ public class ProcessInspector : IDisposable
 
     public ProcessInspector(ILogger<ProcessInspector>? logger = null)
     {
-        if (logger == null)
-        {
-            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
-            _logger = _ownedFactory.CreateLogger<ProcessInspector>();
-        }
-        else
-        {
-            _logger = logger;
-        }
+        _logger = logger ?? NullLogger<ProcessInspector>.Instance;
     }
 
     /// <summary>
@@ -171,9 +163,5 @@ public class ProcessInspector : IDisposable
         };
     }
 
-    public void Dispose()
-    {
-        _ownedFactory?.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    public void Dispose() => GC.SuppressFinalize(this);
 }

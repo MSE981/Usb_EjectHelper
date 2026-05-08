@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace UsbEjectHelper.Core;
@@ -67,23 +68,17 @@ public class ScanSummary
 public class HandleScanner : IDisposable
 {
     private readonly ILogger<HandleScanner> _logger;
-    private readonly ILoggerFactory? _ownedFactory;
     private readonly VolumeResolver _volumeResolver;
     private readonly ProcessInspector _processInspector;
 
-    public HandleScanner(VolumeResolver? volumeResolver = null, ProcessInspector? processInspector = null, ILogger<HandleScanner>? logger = null)
+    public HandleScanner(
+        VolumeResolver volumeResolver,
+        ProcessInspector processInspector,
+        ILogger<HandleScanner>? logger = null)
     {
-        if (logger == null)
-        {
-            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
-            _logger = _ownedFactory.CreateLogger<HandleScanner>();
-        }
-        else
-        {
-            _logger = logger;
-        }
-        _volumeResolver = volumeResolver ?? new VolumeResolver();
-        _processInspector = processInspector ?? new ProcessInspector();
+        _volumeResolver = volumeResolver ?? throw new ArgumentNullException(nameof(volumeResolver));
+        _processInspector = processInspector ?? throw new ArgumentNullException(nameof(processInspector));
+        _logger = logger ?? NullLogger<HandleScanner>.Instance;
     }
 
     /// <summary>
@@ -276,9 +271,5 @@ public class HandleScanner : IDisposable
         return results;
     }
 
-    public void Dispose()
-    {
-        _ownedFactory?.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    public void Dispose() => GC.SuppressFinalize(this);
 }

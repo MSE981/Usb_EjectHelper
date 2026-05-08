@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.InteropServices;
 
 namespace UsbEjectHelper.Core;
@@ -28,19 +29,10 @@ public enum EjectResult
 public class EjectService : IDisposable
 {
     private readonly ILogger<EjectService> _logger;
-    private readonly ILoggerFactory? _ownedFactory;
 
     public EjectService(ILogger<EjectService>? logger = null)
     {
-        if (logger == null)
-        {
-            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
-            _logger = _ownedFactory.CreateLogger<EjectService>();
-        }
-        else
-        {
-            _logger = logger;
-        }
+        _logger = logger ?? NullLogger<EjectService>.Instance;
     }
 
     /// <summary>
@@ -221,11 +213,7 @@ public class EjectService : IDisposable
         }
     }
 
-    public void Dispose()
-    {
-        _ownedFactory?.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    public void Dispose() => GC.SuppressFinalize(this);
 
     /// <summary>
     /// 通过 CM_Request_Device_Eject / SetupDi 尝试弹出。

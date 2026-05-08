@@ -1,5 +1,6 @@
 using System.Management;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UsbEjectHelper.Core;
 
@@ -13,7 +14,7 @@ public class WmiQueryService : IWmiQueryService, IDisposable
 
     public WmiQueryService(ILogger<WmiQueryService>? logger = null)
     {
-        _logger = logger ?? LoggerFactory.Create(b => b.AddConsole()).CreateLogger<WmiQueryService>();
+        _logger = logger ?? NullLogger<WmiQueryService>.Instance;
         _scope = new ManagementScope(@"\\.\root\cimv2");
         try
         {

@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Logging;
-using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace UsbEjectHelper.Core;
 
@@ -9,7 +9,6 @@ namespace UsbEjectHelper.Core;
 public class VolumeResolver : IDisposable
 {
     private readonly ILogger<VolumeResolver> _logger;
-    private readonly ILoggerFactory? _ownedFactory;
 
     /// <summary>NT 设备名 → 盘符 缓存，如 "\Device\HarddiskVolume5" → "E:"</summary>
     private readonly Dictionary<string, string> _deviceToDriveMap = new(StringComparer.OrdinalIgnoreCase);
@@ -25,15 +24,7 @@ public class VolumeResolver : IDisposable
 
     public VolumeResolver(ILogger<VolumeResolver>? logger = null)
     {
-        if (logger == null)
-        {
-            _ownedFactory = LoggerFactory.Create(b => b.AddConsole());
-            _logger = _ownedFactory.CreateLogger<VolumeResolver>();
-        }
-        else
-        {
-            _logger = logger;
-        }
+        _logger = logger ?? NullLogger<VolumeResolver>.Instance;
         BuildMappings();
     }
 
@@ -225,9 +216,5 @@ public class VolumeResolver : IDisposable
         return string.Empty;
     }
 
-    public void Dispose()
-    {
-        _ownedFactory?.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    public void Dispose() => GC.SuppressFinalize(this);
 }
