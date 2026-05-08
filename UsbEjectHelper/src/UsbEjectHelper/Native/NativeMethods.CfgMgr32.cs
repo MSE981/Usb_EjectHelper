@@ -47,4 +47,17 @@ internal static partial class NativeMethods
         StringBuilder pszVetoName,
         uint ulNameLength,
         uint ulFlags);
+
+    /// <summary>
+    /// CM_Request_Device_EjectW 的 IntPtr 重载 —— 避免 StringBuilder marshalling 在
+    /// 某些设备路径（含特殊 NT 命名空间字符）下读到缓冲尾部未清零内存的问题。
+    /// 调用方负责分配 / 释放 <paramref name="pszVetoName"/>。
+    /// </summary>
+    [DllImport(CfgMgr32, EntryPoint = "CM_Request_Device_EjectW", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern int CM_Request_Device_EjectW_Ptr(
+        uint dnDevInst,
+        out PNP_VETO_TYPE pVetoType,
+        IntPtr pszVetoName,
+        uint ulNameLength,
+        uint ulFlags);
 }

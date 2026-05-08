@@ -58,7 +58,8 @@ public class ExportServiceTests
         var summary = new ScanSummary { TargetDrive = "E:" };
         var json = _sut.ExportScanResults(summary);
         Assert.NotEmpty(json);
-        Assert.Contains("Restart Manager", json);
+        // 默认方法字段应当带出来；具体字符串随版本演化（PR8: "NT Handle Scan"）
+        Assert.Contains(summary.Method, json);
     }
 
     [Fact]

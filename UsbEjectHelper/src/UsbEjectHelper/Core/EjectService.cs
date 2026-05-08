@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace UsbEjectHelper.Core;
 
@@ -225,6 +224,27 @@ public class EjectService : IEjectService, IDisposable
     public void Dispose() => GC.SuppressFinalize(this);
 
     /// <summary>
+    /// PNP_VETO_TYPE → 中文描述。internal 仅为单测可见。
+    /// </summary>
+    internal static string DescribeVeto(NativeMethods.PNP_VETO_TYPE vetoType) => vetoType switch
+    {
+        NativeMethods.PNP_VETO_TYPE.Unknown               => "未知原因",
+        NativeMethods.PNP_VETO_TYPE.LegacyDevice          => "传统设备",
+        NativeMethods.PNP_VETO_TYPE.PendingClose          => "正在关闭中的句柄",
+        NativeMethods.PNP_VETO_TYPE.WindowsApp            => "Windows 应用程序",
+        NativeMethods.PNP_VETO_TYPE.WindowsService        => "Windows 服务",
+        NativeMethods.PNP_VETO_TYPE.OutstandingOpen       => "仍有打开的文件句柄",
+        NativeMethods.PNP_VETO_TYPE.Device                => "设备本身",
+        NativeMethods.PNP_VETO_TYPE.Driver                => "驱动程序",
+        NativeMethods.PNP_VETO_TYPE.IllegalDeviceRequest  => "非法设备请求",
+        NativeMethods.PNP_VETO_TYPE.InsufficientPower     => "电源不足",
+        NativeMethods.PNP_VETO_TYPE.NonDisableable        => "不可禁用的设备",
+        NativeMethods.PNP_VETO_TYPE.LegacyDriver          => "传统驱动",
+        NativeMethods.PNP_VETO_TYPE.InsufficientRights    => "权限不足",
+        _                                                 => $"未识别（{vetoType}）"
+    };
+
+    /// <summary>
     /// 通过 CM_Request_Device_Eject / SetupDi 尝试弹出。
     /// 链路：盘符 → CreateFile → IOCTL_STORAGE_GET_DEVICE_NUMBER → SetupDi 枚举磁盘
     /// → 匹配 DeviceNumber → 取 DevInst → CM_Get_Parent → CM_Request_Device_EjectW。
@@ -258,13 +278,29 @@ public class EjectService : IEjectService, IDisposable
                 return (EjectResult.ApiFailure, $"CM_Get_Parent 失败 (CR={parentResult})");
             }
 
-            var vetoName = new StringBuilder(NativeMethods.MAX_DEVICE_ID_LEN);
-            var ejectResult = NativeMethods.CM_Request_Device_EjectW(
-                parentInst,
-                out var vetoType,
-                vetoName,
-                NativeMethods.MAX_DEVICE_ID_LEN,
-                0);
+            // 用 IntPtr 缓冲读 vetoName：StringBuilder marshaller 在某些设备路径上
+            // 会读到缓冲尾部的随机内存（出现"音响"等乱码）；改成手工 PtrToStringUni 严格
+            // 在 \0 处截断。MAX_PATH=260 覆盖 cfgmgr32 设备路径最长情形。
+            const int VetoBufferChars = 260;
+            var vetoBuffer = Marshal.AllocHGlobal(VetoBufferChars * sizeof(char));
+            string vetoNameStr;
+            int ejectResult;
+            NativeMethods.PNP_VETO_TYPE vetoType;
+            try
+            {
+                // 缓冲手动清零，确保 PtrToStringUni 不会越过函数实际写入的内容
+                for (int i = 0; i < VetoBufferChars; i++)
+                {
+                    Marshal.WriteInt16(vetoBuffer, i * sizeof(char), 0);
+                }
+                ejectResult = NativeMethods.CM_Request_Device_EjectW_Ptr(
+                    parentInst, out vetoType, vetoBuffer, VetoBufferChars, 0);
+                vetoNameStr = Marshal.PtrToStringUni(vetoBuffer) ?? string.Empty;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(vetoBuffer);
+            }
 
             if (ejectResult == NativeMethods.CR_SUCCESS && vetoType == NativeMethods.PNP_VETO_TYPE.Unknown)
             {
@@ -273,9 +309,11 @@ public class EjectService : IEjectService, IDisposable
 
             if (ejectResult == NativeMethods.CR_REMOVE_VETOED || vetoType != NativeMethods.PNP_VETO_TYPE.Unknown)
             {
-                var detail = $"被 {vetoType} 阻止" +
-                             (vetoName.Length > 0 ? $"（{vetoName}）" : "");
-                _logger.LogInformation("CM 弹出被 veto: {Detail}", detail);
+                var reason = DescribeVeto(vetoType);
+                var detail = string.IsNullOrEmpty(vetoNameStr)
+                    ? $"被{reason}阻止"
+                    : $"被{reason}阻止（{vetoNameStr}）";
+                _logger.LogInformation("CM 弹出被 veto: type={VetoType}, name={VetoName}", vetoType, vetoNameStr);
                 return (EjectResult.DeviceBusyVetoed, detail);
             }
 

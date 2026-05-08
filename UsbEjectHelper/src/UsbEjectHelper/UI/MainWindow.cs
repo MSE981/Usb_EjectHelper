@@ -21,6 +21,8 @@ public class MainWindow : Form
     private readonly Button _scanButton;
     private readonly Button _refreshButton;
     private readonly Button _exportButton;
+    private readonly Button _settingsButton;
+    private readonly Button _hideButton;
 
     private readonly ListView _resultListView;
     private readonly StatusStrip _statusStrip;
@@ -67,15 +69,19 @@ public class MainWindow : Form
         _deviceListView.Columns.Add("文件系统", 80);
         _deviceListView.Columns.Add("容量", 120);
 
-        _ejectButton = new Button { Text = "弹出 (&E)", Location = new Point(12, 200), Size = new Size(90, 30) };
-        _scanButton = new Button { Text = "扫描占用 (&S)", Location = new Point(110, 200), Size = new Size(90, 30) };
-        _refreshButton = new Button { Text = "刷新 (&R)", Location = new Point(208, 200), Size = new Size(90, 30) };
-        _exportButton = new Button { Text = "导出 JSON", Location = new Point(306, 200), Size = new Size(90, 30) };
+        _ejectButton    = new Button { Text = "弹出 (&E)",     Location = new Point(  12, 200), Size = new Size(90, 30) };
+        _scanButton     = new Button { Text = "扫描占用 (&S)",  Location = new Point( 110, 200), Size = new Size(90, 30) };
+        _refreshButton  = new Button { Text = "刷新 (&R)",      Location = new Point( 208, 200), Size = new Size(90, 30) };
+        _exportButton   = new Button { Text = "导出 JSON",      Location = new Point( 306, 200), Size = new Size(90, 30) };
+        _settingsButton = new Button { Text = "设置 (&O)",      Location = new Point( 404, 200), Size = new Size(90, 30) };
+        _hideButton     = new Button { Text = "隐藏到托盘 (&H)", Location = new Point( 502, 200), Size = new Size(110, 30) };
 
-        _ejectButton.Click += OnEject;
-        _scanButton.Click += OnScan;
+        _ejectButton.Click   += OnEject;
+        _scanButton.Click    += OnScan;
         _refreshButton.Click += (_, _) => DeviceRefreshRequested?.Invoke(this, EventArgs.Empty);
-        _exportButton.Click += OnExport;
+        _exportButton.Click  += OnExport;
+        _settingsButton.Click += (_, _) => ShowSettings();
+        _hideButton.Click    += (_, _) => Hide();
 
         var resultLabel = new Label
         {
@@ -106,6 +112,7 @@ public class MainWindow : Form
         {
             deviceLabel, _deviceListView,
             _ejectButton, _scanButton, _refreshButton, _exportButton,
+            _settingsButton, _hideButton,
             resultLabel, _resultListView,
             _statusStrip
         });
@@ -195,89 +202,132 @@ public class MainWindow : Form
         _statusLabel.Text = text;
     }
 
+    /// <summary>正在执行弹出 / 扫描的动作锁，防止 async void 处理器被重复触发导致重复对话框。</summary>
+    private int _busy;
+
     private async void OnEject(object? sender, EventArgs e)
     {
-        if (_deviceListView.SelectedItems.Count == 0)
+        // CompareExchange 单次拿锁；正在弹出时直接吞掉新的点击。
+        if (System.Threading.Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
-            MessageBox.Show("请先选择一个设备。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _logger.LogDebug("OnEject 正在执行，忽略并发点击。");
             return;
         }
 
-        var drive = _deviceListView.SelectedItems[0].SubItems[0].Text;
-        SetStatus($"正在尝试弹出 {drive}…");
-        _logger.LogInformation("弹出请求：{Drive}", drive);
-
-        var (result, message) = await Task.Run(() => _services.EjectService.TryEject(drive));
-
-        if (result == EjectResult.Success)
+        try
         {
-            SetStatus(message);
-            MessageBox.Show(message, "弹出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            _services.DeviceWatcher.RefreshDevices();
-        }
-        else if (result == EjectResult.DeviceBusy || result == EjectResult.DeviceBusyVetoed)
-        {
-            var title = result == EjectResult.DeviceBusyVetoed ? "弹出被拒绝" : "弹出失败";
-            SetStatus($"{title}：{drive} 正忙。");
-            var choice = MessageBox.Show(
-                $"{message}\n\n是否立即扫描占用进程？",
-                title,
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-
-            if (choice == DialogResult.Yes)
+            if (_deviceListView.SelectedItems.Count == 0)
             {
-                OnScan(sender, e);
+                MessageBox.Show("请先选择一个设备。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var drive = _deviceListView.SelectedItems[0].SubItems[0].Text;
+            SetStatus($"正在尝试弹出 {drive}…");
+            _logger.LogInformation("弹出请求：{Drive}", drive);
+
+            SetActionButtonsEnabled(false);
+            var (result, message) = await Task.Run(() => _services.EjectService.TryEject(drive));
+
+            if (result == EjectResult.Success)
+            {
+                SetStatus(message);
+                MessageBox.Show(message, "弹出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _services.DeviceWatcher.RefreshDevices();
+            }
+            else if (result == EjectResult.DeviceBusy || result == EjectResult.DeviceBusyVetoed)
+            {
+                var title = result == EjectResult.DeviceBusyVetoed ? "弹出被拒绝" : "弹出失败";
+                SetStatus($"{title}：{drive} 正忙。");
+                var choice = MessageBox.Show(
+                    $"{message}\n\n是否立即扫描占用进程？",
+                    title,
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (choice == DialogResult.Yes)
+                {
+                    // 推迟到 OnEject 释放 _busy 之后再触发扫描，避免被自己的并发锁吞掉
+                    BeginInvoke(() => OnScan(sender, e));
+                }
+            }
+            else
+            {
+                SetStatus($"弹出失败：{message}");
+                MessageBox.Show(message, "弹出失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
-        else
+        finally
         {
-            SetStatus($"弹出失败：{message}");
-            MessageBox.Show(message, "弹出失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            SetActionButtonsEnabled(true);
+            System.Threading.Interlocked.Exchange(ref _busy, 0);
         }
+    }
+
+    private void SetActionButtonsEnabled(bool enabled)
+    {
+        _ejectButton.Enabled = enabled;
+        _scanButton.Enabled = enabled;
+        _refreshButton.Enabled = enabled;
+        _exportButton.Enabled = enabled;
     }
 
     private async void OnScan(object? sender, EventArgs e)
     {
-        if (_deviceListView.SelectedItems.Count == 0)
+        if (System.Threading.Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
-            MessageBox.Show("请先选择一个设备。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _logger.LogDebug("OnScan 正在执行，忽略并发点击。");
             return;
         }
 
-        var drive = _deviceListView.SelectedItems[0].SubItems[0].Text;
-        SetStatus($"正在扫描 {drive} 的占用（Restart Manager）…");
-        _logger.LogInformation("扫描请求：{Drive}", drive);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, cts.Token));
-
-        _resultListView.Items.Clear();
-
-        if (!summary.HasResults)
+        try
         {
-            _resultListView.Items.Add(new ListViewItem(new[]
+            if (_deviceListView.SelectedItems.Count == 0)
             {
-                "--", "当前扫描方法未发现占用", summary.LimitationNote, "", "RM"
-            }));
-            SetStatus($"扫描完成：未发现占用。{summary.LimitationNote}");
-        }
-        else
-        {
-            foreach (var r in summary.Results)
-            {
-                var riskTag = r.IsCriticalProcess ? "⚠ 系统进程" : "";
-                var item = new ListViewItem(new[]
-                {
-                    r.Pid > 0 ? r.Pid.ToString() : "--",
-                    r.ProcessName,
-                    r.ExecutablePath,
-                    r.FilePath,
-                    r.DetectionMethod + (string.IsNullOrEmpty(riskTag) ? "" : $" {riskTag}")
-                });
-                _resultListView.Items.Add(item);
+                MessageBox.Show("请先选择一个设备。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
-            SetStatus($"扫描完成：发现 {summary.Results.Count} 个可能的占用。");
+
+            var drive = _deviceListView.SelectedItems[0].SubItems[0].Text;
+            SetStatus($"正在扫描 {drive} 的占用…");
+            _logger.LogInformation("扫描请求：{Drive}", drive);
+
+            SetActionButtonsEnabled(false);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, cts.Token));
+
+            _resultListView.Items.Clear();
+
+            if (!summary.HasResults)
+            {
+                _resultListView.Items.Add(new ListViewItem(new[]
+                {
+                    "--", "未发现占用", summary.LimitationNote, "", summary.Method
+                }));
+                SetStatus($"扫描完成：未发现占用（方法：{summary.Method}）。");
+            }
+            else
+            {
+                foreach (var r in summary.Results)
+                {
+                    var riskTag = r.IsCriticalProcess ? "⚠ 系统进程" : "";
+                    var item = new ListViewItem(new[]
+                    {
+                        r.Pid > 0 ? r.Pid.ToString() : "--",
+                        r.ProcessName,
+                        r.ExecutablePath,
+                        r.FilePath,
+                        r.DetectionMethod + (string.IsNullOrEmpty(riskTag) ? "" : $" {riskTag}")
+                    });
+                    _resultListView.Items.Add(item);
+                }
+                SetStatus($"扫描完成：发现 {summary.Results.Count} 个占用进程（方法：{summary.Method}）。");
+            }
+        }
+        finally
+        {
+            SetActionButtonsEnabled(true);
+            System.Threading.Interlocked.Exchange(ref _busy, 0);
         }
     }
 

@@ -41,4 +41,24 @@ public class EjectServiceTests
         Assert.Contains(EjectResult.DeviceNotFound, values);
         Assert.Contains(EjectResult.ApiFailure, values);
     }
+
+    /// <summary>PNP_VETO_TYPE 的全部 13 个枚举值都必须有中文描述，杜绝出现"被 Device 阻止"这种英文。</summary>
+    [Fact]
+    public void DescribeVeto_AllEnumValues_HaveChineseLabel()
+    {
+        var method = typeof(EjectService).GetMethod(
+            "DescribeVeto",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        foreach (var value in Enum.GetValues<UsbEjectHelper.Core.NativeMethods.PNP_VETO_TYPE>())
+        {
+            var label = (string)method!.Invoke(null, new object[] { value })!;
+            Assert.False(string.IsNullOrWhiteSpace(label), $"{value} 应有中文描述");
+            // 含中文字符（基本汉字区 \u4e00-\u9fff）
+            Assert.Matches(@"[\u4e00-\u9fff]", label);
+            // 不应是直接的英文枚举名
+            Assert.NotEqual(value.ToString(), label);
+        }
+    }
 }

@@ -33,8 +33,8 @@ public class ScanSummaryTests
     {
         var summary = new ScanSummary();
         Assert.NotEmpty(summary.LimitationNote);
-        Assert.Contains("Restart Manager", summary.LimitationNote);
-        Assert.Contains("便携软件", summary.LimitationNote);
+        // 必须给出可执行的下一步建议（PR8 起从"RM 局限性"改为"提权 / 跨用户提示"）
+        Assert.Contains("管理员", summary.LimitationNote);
     }
 
     [Fact]
@@ -51,9 +51,10 @@ public class ScanSummaryTests
     }
 
     [Fact]
-    public void ScanSummary_DefaultMethod_ShouldBeRestartManager()
+    public void ScanSummary_DefaultMethod_ShouldBeNtHandleScan()
     {
+        // PR8 起默认扫描方法升级为 NT Handle Scan，RM 仅作为后备
         var summary = new ScanSummary();
-        Assert.Equal("Restart Manager", summary.Method);
+        Assert.Equal("NT Handle Scan", summary.Method);
     }
 }

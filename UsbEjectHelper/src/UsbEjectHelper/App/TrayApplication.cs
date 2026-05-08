@@ -55,6 +55,9 @@ public class TrayApplication : ApplicationContext
         _notifyIcon.ContextMenuStrip.Items.Add(new ToolStripSeparator());
         _notifyIcon.ContextMenuStrip.Items.Add(_exitMenuItem);
 
+        // 左键单击：toggle 主窗口（显示 ↔ 隐藏）。
+        // 右键由 ContextMenuStrip 自动处理。双击保留为"显示"以兼容惯用习惯。
+        _notifyIcon.MouseClick += OnTrayMouseClick;
         _notifyIcon.DoubleClick += OnShowWindow;
 
         _logger.LogInformation("托盘已初始化。");
@@ -73,6 +76,20 @@ public class TrayApplication : ApplicationContext
         else
         {
             _logger.LogInformation("启动后最小化到托盘（MinimizeToTrayOnStart=true）。");
+        }
+    }
+
+    /// <summary>左键 toggle 主窗口的可见性。</summary>
+    public void ToggleMainWindow()
+    {
+        if (_mainWindow == null || _mainWindow.IsDisposed || !_mainWindow.Visible)
+        {
+            ShowMainWindow();
+        }
+        else
+        {
+            _mainWindow.Hide();
+            _logger.LogInformation("主窗口已通过托盘点击隐藏到托盘。");
         }
     }
 
@@ -135,6 +152,14 @@ public class TrayApplication : ApplicationContext
     }
 
     private void OnShowWindow(object? sender, EventArgs e) => ShowMainWindow();
+
+    private void OnTrayMouseClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left)
+        {
+            ToggleMainWindow();
+        }
+    }
 
     private void OnRefreshDevices(object? sender, EventArgs e)
     {
