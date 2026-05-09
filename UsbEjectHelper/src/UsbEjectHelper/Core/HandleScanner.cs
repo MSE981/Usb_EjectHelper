@@ -27,8 +27,11 @@ public class HandleScanResult
     /// <summary>检测方法来源</summary>
     public string DetectionMethod { get; init; } = "Restart Manager";
 
-    /// <summary>是否为系统关键进程</summary>
+    /// <summary>是否为系统关键进程（RiskTier == Critical 的快捷别名）。</summary>
     public bool IsCriticalProcess { get; init; }
+
+    /// <summary>风险分级。Critical → 任何关闭操作都被拒绝；High → 强制结束需打字匹配。</summary>
+    public ProcessRiskTier RiskTier { get; init; } = ProcessRiskTier.Normal;
 
     /// <summary>错误/权限状态（空表示正常）</summary>
     public string ErrorState { get; init; } = string.Empty;
@@ -322,7 +325,7 @@ public class HandleScanner : IHandleScanner, IDisposable
         var procName = processInfo?.ProcessName ?? procInfo.strAppName ?? $"PID:{pid}";
         var exePath = processInfo?.ExecutablePath ?? "[未知路径]";
         var cmdLine = processInfo?.CommandLine ?? string.Empty;
-        var isCritical = processInfo?.IsCriticalProcess ?? false;
+        var riskTier = processInfo?.RiskTier ?? ProcessInspector.GetRiskTier(procName);
 
         // strAppName 是 RM 给出的友好应用名（例如 "记事本"），strServiceShortName 是服务名
         var appName = !string.IsNullOrEmpty(procInfo.strAppName) ? procInfo.strAppName : procName;
@@ -336,7 +339,8 @@ public class HandleScanner : IHandleScanner, IDisposable
             CommandLine = cmdLine,
             FilePath = $"在 {driveLetter} 上持有句柄",
             DetectionMethod = "Restart Manager",
-            IsCriticalProcess = isCritical,
+            IsCriticalProcess = riskTier == ProcessRiskTier.Critical,
+            RiskTier = riskTier,
             ErrorState = string.Empty
         });
 
@@ -534,7 +538,7 @@ public class HandleScanner : IHandleScanner, IDisposable
                 var processInfo = _processInspector.GetProcessInfo(pid);
                 var procName = processInfo?.ProcessName ?? $"PID:{pid}";
                 var exePath = processInfo?.ExecutablePath ?? "[未知路径]";
-                var isCritical = processInfo?.IsCriticalProcess ?? false;
+                var riskTier = processInfo?.RiskTier ?? ProcessInspector.GetRiskTier(procName);
                 var firstPath = pathsList[0];
                 var sample = pathsList.Count == 1 ? firstPath : $"{firstPath}（共 {pathsList.Count} 个句柄）";
 
@@ -545,7 +549,8 @@ public class HandleScanner : IHandleScanner, IDisposable
                     ExecutablePath = exePath,
                     FilePath = sample,
                     DetectionMethod = "NT Handle",
-                    IsCriticalProcess = isCritical
+                    IsCriticalProcess = riskTier == ProcessRiskTier.Critical,
+                    RiskTier = riskTier
                 });
             }
         }

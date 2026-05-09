@@ -38,6 +38,36 @@ public class AppSettings
     /// </summary>
     public bool EnableDeepHandleScan { get; set; }
 
+    /// <summary>
+    /// 阶段 2 总闸门：是否允许在程序内结束占用进程（L2/L3/L4 任何一种）。
+    /// 默认 false。首次开启走二次确认对话框（同 EnableDeepHandleScan 模式）。
+    /// </summary>
+    public bool AllowProcessTermination { get; set; }
+
+    /// <summary>
+    /// L4 单独闸门：是否在 UI 上提供"强制结束 (TerminateProcess)"选项。
+    /// 默认 false。开启不会让操作变得自动，每次仍要走 ConfirmTerminateDialog。
+    /// </summary>
+    public bool EnableForceTerminate { get; set; }
+
+    /// <summary>
+    /// 是否允许"强制弹出"按钮（FSCTL_DISMOUNT_VOLUME 路径）。
+    /// 默认 false。首次开启走二次确认；每次执行还要走 2s 倒计时确认对话框。
+    /// </summary>
+    public bool EnableForceEject { get; set; }
+
+    /// <summary>WM_CLOSE 等待进程退出的超时秒数（1~30）。</summary>
+    public int GracefulCloseTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>是否记录动作审计日志到 %LOCALAPPDATA%\UsbEjectHelper\actions.log。</summary>
+    public bool EnableActionAuditLog { get; set; } = true;
+
+    /// <summary>审计日志单文件大小阈值（MB）。</summary>
+    public int AuditLogMaxSizeMB { get; set; } = 1;
+
+    /// <summary>审计日志滚动保留份数。</summary>
+    public int AuditLogMaxFiles { get; set; } = 5;
+
     /// <summary>单例锁</summary>
     private static readonly object _lock = new();
 

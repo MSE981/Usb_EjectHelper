@@ -68,16 +68,54 @@ public class ProcessInspectorTests
     [Fact]
     public void ProcessInfo_RiskLevel_Critical_ShouldBeCorrect()
     {
-        var info = new ProcessInfo { ProcessName = "System", IsCriticalProcess = true };
+        var info = new ProcessInfo { ProcessName = "System", RiskTier = ProcessRiskTier.Critical };
         Assert.Equal("系统关键进程", info.RiskLevel);
-        Assert.False(info.CanTerminate); // 阶段 1 始终为 false
+        Assert.True(info.IsCriticalProcess);
+        Assert.False(info.CanTerminate);
+    }
+
+    [Fact]
+    public void ProcessInfo_RiskLevel_High_ShouldBeCorrect()
+    {
+        var info = new ProcessInfo { ProcessName = "explorer.exe", RiskTier = ProcessRiskTier.High };
+        Assert.Equal("高风险进程", info.RiskLevel);
+        Assert.False(info.IsCriticalProcess);
+        Assert.True(info.CanTerminate);
     }
 
     [Fact]
     public void ProcessInfo_RiskLevel_Normal_ShouldBeCorrect()
     {
-        var info = new ProcessInfo { ProcessName = "notepad.exe", IsCriticalProcess = false };
+        var info = new ProcessInfo { ProcessName = "notepad.exe", RiskTier = ProcessRiskTier.Normal };
         Assert.Equal("普通进程", info.RiskLevel);
-        Assert.False(info.CanTerminate);
+        Assert.False(info.IsCriticalProcess);
+        Assert.True(info.CanTerminate);
+    }
+
+    [Theory]
+    [InlineData("System", ProcessRiskTier.Critical)]
+    [InlineData("csrss", ProcessRiskTier.Critical)]
+    [InlineData("csrss.exe", ProcessRiskTier.Critical)]
+    [InlineData("Registry", ProcessRiskTier.Critical)]
+    [InlineData("explorer", ProcessRiskTier.High)]
+    [InlineData("explorer.exe", ProcessRiskTier.High)]
+    [InlineData("MsMpEng.exe", ProcessRiskTier.High)]
+    [InlineData("OneDrive", ProcessRiskTier.High)]
+    [InlineData("notepad", ProcessRiskTier.Normal)]
+    [InlineData("notepad.exe", ProcessRiskTier.Normal)]
+    [InlineData("chrome", ProcessRiskTier.Normal)]
+    [InlineData("", ProcessRiskTier.Normal)]
+    public void GetRiskTier_ShouldClassifyCorrectly(string processName, ProcessRiskTier expected)
+    {
+        Assert.Equal(expected, ProcessInspector.GetRiskTier(processName));
+    }
+
+    [Fact]
+    public void GetHighRiskProcessNames_ShouldReturnNonEmpty()
+    {
+        var names = ProcessInspector.GetHighRiskProcessNames();
+        Assert.NotEmpty(names);
+        Assert.Contains("explorer.exe", names);
+        Assert.Contains("MsMpEng.exe", names);
     }
 }

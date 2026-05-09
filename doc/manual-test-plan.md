@@ -80,6 +80,31 @@
 
 ---
 
+## K. 阶段 2：弹出失败的恢复手段（必须真实 U 盘 + 真实占用）
+
+适用版本：实施 PR10（弹出失败三选一对话框 + 进程关闭 + 强制弹出）之后。
+
+| 编号 | 步骤 | 预期 |
+| -- | -- | -- |
+| **K-1** | notepad.exe 打开 U 盘文件 → 点弹出 → 三选一对话框出现 → 选 ②"关闭占用进程" → 子对话框默认勾选 + 优雅关闭 → 点开始 | notepad 弹"是否保存"对话框；用户点"不保存" → notepad 退出 → 主窗口提示"成功 1 / 共 1"；不会自动重试弹出 |
+| **K-2** | 同 K-1，但用户在 notepad 保存对话框点"取消" | 5s 超时 → 主窗口结果摘要里显示"⏱ notepad.exe — 超时（应用可能弹了'是否保存'对话框）"；用户处理 notepad 后**手动**点弹出 → 弹出成功 |
+| **K-3** | notepad 持文件 → 弹出 → 选 ② → 子对话框切到"强制结束"+ 启动 ConfirmTerminateDialog → 勾选"我已了解" → 确认 | notepad 立即消失 → 摘要"✓ notepad.exe — 已退出 (TerminateProcess)" |
+| **K-4** | 资源管理器持有 U 盘根目录 → 弹出 → 选 ② → 在子对话框看到 explorer 行带浅红背景 + "⚠ High" 标记 → 切到"强制结束" → 触发 ConfirmTerminateDialog | 风险横幅红色明示"桌面会闪一下"；要求**打字精确匹配** `explorer.exe`，输入对了才能点确认 |
+| **K-5** | 弹出 → 选 ③ "强制弹出" | ForceEjectConfirmDialog 出现：标题 / 横幅 / 风险列表都是红色；"确认 (2)"按钮灰禁用；1s 后变 "确认 (1)"；2s 后变红色"强制弹出"启用；点击 → U 盘从列表消失 |
+| **K-6** | 同 K-5 但在 1.5s 时按 ESC | 立即取消，无任何动作；audit log **没有** force-eject 行（仅 Refused-NoConsent） |
+| **K-7** | 检查 `%LOCALAPPDATA%\UsbEjectHelper\actions.log` | 每个动作一行 JSON；`{"action":"close-graceful",...}` / `{"action":"force-terminate",...}` / `{"action":"force-eject",...}` / `{"action":"reveal",...}`；`consent` 字段记录用户具体怎么同意的 |
+| **K-8** | 启用 EnablePrivacyMode 后再做 K-1，看 actions.log | `exe` / `filePath` 字段已脱敏成 `E:\***.txt` 形式；进程名 / PID / drive 字段不脱敏 |
+| **K-9** | 占用结果列表里**右键** notepad 行 | 上下文菜单：在资源管理器中定位 / 优雅关闭 / 强制结束 / 复制路径；选"在资源管理器中定位" → 弹出 explorer 高亮 notepad.exe |
+| **K-10** | 占用结果列表右键 SYSTEM (PID 4) 或 csrss.exe | 优雅关闭 / 强制结束 都灰禁用；tooltip 显示"系统关键进程不可关闭" |
+| **K-11** | 设置首次开启 `允许在程序内结束占用进程` | 弹二次确认对话框，详细说明放开了什么能力 + 不放开什么；点否 → 不保存 |
+| **K-12** | 设置首次开启 `允许强制弹出` | 弹二次确认对话框，明确说明 dismount 影响 + 数据丢失风险 |
+| **K-13** | 设置开关全打开 → 重启程序 → 检查 `settings.json` | `AllowProcessTermination`、`EnableForceTerminate`、`EnableForceEject`、`GracefulCloseTimeoutSeconds`、`EnableActionAuditLog` 等字段已落盘且 round-trip 正确 |
+| **K-14** | 强制弹出对 C: / 固定盘（手工修改源代码或测试入口） | ForceEjectService 在 Validate 阶段拒绝；不会真的对系统盘执行 dismount |
+
+> 阶段 2 自动化已覆盖：`ProcessTerminator` (Critical 拒绝 / 闸门拒绝 / 幂等 / 子 cmd 集成杀)，`ForceEjectService` (无效盘 / 系统盘拒绝 / 盘符规范化)，`ActionAuditLog` (写入 / JSON Lines / 滚动 / 脱敏 / 写失败不抛)，`AppSettings` (7 个新字段 round-trip + 默认值)，`ProcessInspector.GetRiskTier` (Critical / High / Normal 分类)。RM L3 / WM_CLOSE 真实 GUI 应用 / 强制弹出 USB 物理路径只能用真硬件验证。
+
+---
+
 ## 6. 单实例真实场景
 
 | 编号 | 步骤 | 预期 |

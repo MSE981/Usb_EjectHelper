@@ -107,6 +107,9 @@ public class MainWindow : Form
         _resultListView.Columns.Add("占用路径", 200);
         _resultListView.Columns.Add("检测方法", 80);
 
+        // 占用列表的右键菜单（L1 揭示 / L2 优雅关闭 / L4 强制结束 / 复制路径）
+        AttachResultContextMenu();
+
         _statusStrip = new StatusStrip();
         _statusLabel = new ToolStripStatusLabel("就绪");
         _statusStrip.Items.Add(_statusLabel);
@@ -253,18 +256,27 @@ public class MainWindow : Form
             }
             else if (result == EjectResult.DeviceBusy || result == EjectResult.DeviceBusyVetoed)
             {
-                var title = result == EjectResult.DeviceBusyVetoed ? "弹出被拒绝" : "弹出失败";
+                var title = result == EjectResult.DeviceBusyVetoed ? "弹出被拒绝" : "设备繁忙";
                 SetStatus($"{title}：{drive} 正忙。");
-                var choice = MessageBox.Show(
-                    $"{message}\n\n是否立即扫描占用进程？",
-                    title,
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
 
-                if (choice == DialogResult.Yes)
+                using var dlg = new EjectFailureDialog(drive, message, _services.Settings);
+                dlg.ShowDialog(this);
+
+                // 用 BeginInvoke 推迟动作执行，让 OnEject 先释放 _busy 锁
+                switch (dlg.Choice)
                 {
-                    // 推迟到 OnEject 释放 _busy 之后再触发扫描，避免被自己的并发锁吞掉
-                    BeginInvoke(() => OnScan(sender, e));
+                    case EjectFailureChoice.Scan:
+                        BeginInvoke(() => OnScan(sender, e));
+                        break;
+                    case EjectFailureChoice.CloseProcesses:
+                        BeginInvoke(() => OnCloseProcessesForDrive(drive));
+                        break;
+                    case EjectFailureChoice.ForceEject:
+                        BeginInvoke(() => OnForceEject(drive));
+                        break;
+                    case EjectFailureChoice.None:
+                    default:
+                        break;
                 }
             }
             else
@@ -328,7 +340,12 @@ public class MainWindow : Form
             {
                 foreach (var r in summary.Results)
                 {
-                    var riskTag = r.IsCriticalProcess ? "⚠ 系统进程" : "";
+                    var riskTag = r.RiskTier switch
+                    {
+                        ProcessRiskTier.Critical => "⚠ 系统关键",
+                        ProcessRiskTier.High => "⚠ High",
+                        _ => string.Empty
+                    };
                     var item = new ListViewItem(new[]
                     {
                         r.Pid > 0 ? r.Pid.ToString() : "--",
@@ -337,6 +354,7 @@ public class MainWindow : Form
                         r.FilePath,
                         r.DetectionMethod + (string.IsNullOrEmpty(riskTag) ? "" : $" {riskTag}")
                     });
+                    item.Tag = r;
                     _resultListView.Items.Add(item);
                 }
                 SetStatus($"扫描完成：发现 {summary.Results.Count} 个占用进程（方法：{summary.Method}）。");
@@ -405,6 +423,400 @@ public class MainWindow : Form
                 _logger.LogError(ex, "导出失败。");
                 SetStatus("导出失败。");
             }
+        }
+    }
+
+    /// <summary>
+    /// 关闭占用进程流程：先扫描，再让用户在对话框里选要关哪些 + 怎么关，执行后回主窗口（不自动重试弹出）。
+    /// </summary>
+    private async void OnCloseProcessesForDrive(string drive)
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            _logger.LogDebug("OnCloseProcessesForDrive 正在执行，忽略重入。");
+            return;
+        }
+
+        try
+        {
+            SetStatus($"正在扫描 {drive} 的占用…");
+            SetActionButtonsEnabled(false);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var allowDeep = _services.Settings.EnableDeepHandleScan;
+            var summary = await Task.Run(() => _services.HandleScanner.Scan(drive, allowDeep, cts.Token));
+
+            if (!summary.HasResults)
+            {
+                MessageBox.Show(
+                    $"扫描完成但未发现占用进程。\n\n方法：{summary.Method}\n{summary.LimitationNote}",
+                    "无可关闭的占用",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                SetStatus("扫描完成：未发现占用。");
+                return;
+            }
+
+            using var dlg = new CloseProcessesDialog(drive, summary.Results, _services.Settings);
+            if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedProcesses.Count == 0)
+            {
+                SetStatus("已取消关闭进程。");
+                return;
+            }
+
+            var pids = dlg.SelectedProcesses.Select(r => r.Pid).Where(p => p > 0).ToList();
+            var useForce = dlg.UseForceTerminate;
+            var timeout = TimeSpan.FromSeconds(dlg.GracefulTimeoutSeconds);
+            var report = new System.Text.StringBuilder();
+            report.AppendLine($"已尝试关闭 {pids.Count} 个进程：");
+            int succ = 0, timedOut = 0, refused = 0, failed = 0;
+
+            await Task.Run(() =>
+            {
+                foreach (var r in dlg.SelectedProcesses)
+                {
+                    if (r.Pid <= 0) continue;
+
+                    TerminationResult tr;
+                    if (useForce && r.RiskTier != ProcessRiskTier.Normal)
+                    {
+                        // High 等级走打字确认；这里要回到 UI 线程
+                        bool confirmed = false;
+                        string consent = "declined";
+                        Invoke(() =>
+                        {
+                            using var conf = new ConfirmTerminateDialog(
+                                r.Pid, r.ProcessName, r.ExecutablePath, r.FilePath, r.RiskTier);
+                            conf.ShowDialog(this);
+                            confirmed = conf.Confirmed;
+                            consent = conf.ConsentKind;
+                        });
+
+                        if (!confirmed)
+                        {
+                            refused++;
+                            report.AppendLine($"  ⊘ {r.ProcessName} ({r.Pid}) — 用户取消");
+                            _services.ActionAuditLog.Append(new AuditEntry
+                            {
+                                Action = "force-terminate", Pid = r.Pid, Name = r.ProcessName,
+                                Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                                Method = "Refused-NoConsent", Success = false, Reason = "用户取消",
+                                Consent = consent
+                            });
+                            continue;
+                        }
+
+                        tr = _services.ProcessTerminator.ForceTerminate(r.Pid);
+                    }
+                    else if (useForce)
+                    {
+                        // Normal 等级也走 ConfirmTerminateDialog（勾选确认）
+                        bool confirmed = false;
+                        string consent = "declined";
+                        Invoke(() =>
+                        {
+                            using var conf = new ConfirmTerminateDialog(
+                                r.Pid, r.ProcessName, r.ExecutablePath, r.FilePath, r.RiskTier);
+                            conf.ShowDialog(this);
+                            confirmed = conf.Confirmed;
+                            consent = conf.ConsentKind;
+                        });
+
+                        if (!confirmed)
+                        {
+                            refused++;
+                            report.AppendLine($"  ⊘ {r.ProcessName} ({r.Pid}) — 用户取消");
+                            _services.ActionAuditLog.Append(new AuditEntry
+                            {
+                                Action = "force-terminate", Pid = r.Pid, Name = r.ProcessName,
+                                Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                                Method = "Refused-NoConsent", Success = false, Reason = "用户取消",
+                                Consent = consent
+                            });
+                            continue;
+                        }
+                        tr = _services.ProcessTerminator.ForceTerminate(r.Pid);
+                    }
+                    else
+                    {
+                        tr = _services.ProcessTerminator.TryCloseGracefully(r.Pid, timeout);
+                    }
+
+                    // 写审计日志
+                    _services.ActionAuditLog.Append(new AuditEntry
+                    {
+                        Action = useForce ? "force-terminate" : "close-graceful",
+                        Pid = tr.Pid, Name = tr.ProcessName,
+                        Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                        Method = tr.Method, Success = tr.Success, Reason = tr.Reason,
+                        DurationMs = (long)tr.Duration.TotalMilliseconds,
+                        Consent = useForce
+                            ? (r.RiskTier == ProcessRiskTier.High ? "type-match-force" : "checkbox-force")
+                            : "checkbox-graceful"
+                    });
+
+                    if (tr.Success) { succ++; report.AppendLine($"  ✓ {r.ProcessName} ({r.Pid}) — 已退出 ({tr.Method})"); }
+                    else if (tr.Method.Contains("Timeout")) { timedOut++; report.AppendLine($"  ⏱ {r.ProcessName} ({r.Pid}) — 超时（应用可能弹了'是否保存'对话框）"); }
+                    else { failed++; report.AppendLine($"  ✗ {r.ProcessName} ({r.Pid}) — {tr.Reason}"); }
+                }
+            });
+
+            report.AppendLine();
+            report.AppendLine($"成功 {succ} | 超时 {timedOut} | 用户取消 {refused} | 其他失败 {failed}");
+            report.AppendLine();
+            report.AppendLine("请处理仍在运行的应用（如保存对话框）后，再点\"弹出\"按钮重试。");
+
+            MessageBox.Show(report.ToString(), "关闭进程结果",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus($"关闭进程完成：成功 {succ} / 共 {pids.Count}");
+        }
+        finally
+        {
+            SetActionButtonsEnabled(true);
+            System.Threading.Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    /// <summary>
+    /// 给 _resultListView 挂上右键菜单 —— L1 揭示 / L2 优雅关闭 / L4 强制结束 / 复制路径。
+    /// 菜单项的 enabled 状态根据当前选中行的 RiskTier 与设置闸门动态决定。
+    /// </summary>
+    private void AttachResultContextMenu()
+    {
+        var menu = new ContextMenuStrip();
+        var revealItem = new ToolStripMenuItem("在资源管理器中定位");
+        var gracefulItem = new ToolStripMenuItem("尝试优雅关闭");
+        var forceItem = new ToolStripMenuItem("强制结束进程...") { ForeColor = Color.FromArgb(192, 32, 32) };
+        var copyItem = new ToolStripMenuItem("复制进程路径");
+
+        menu.Items.AddRange(new ToolStripItem[]
+        {
+            revealItem,
+            new ToolStripSeparator(),
+            gracefulItem,
+            forceItem,
+            new ToolStripSeparator(),
+            copyItem
+        });
+
+        revealItem.Click += (_, _) =>
+        {
+            var r = GetSelectedScanResult();
+            if (r is null || r.Pid <= 0) return;
+            _services.ProcessTerminator.RevealInExplorer(r.Pid);
+            _services.ActionAuditLog.Append(new AuditEntry
+            {
+                Action = "reveal", Pid = r.Pid, Name = r.ProcessName, Exe = r.ExecutablePath,
+                FilePath = r.FilePath, Method = "Reveal", Success = true,
+                Reason = "在资源管理器中定位", Consent = "auto"
+            });
+        };
+
+        gracefulItem.Click += (_, _) =>
+        {
+            var r = GetSelectedScanResult();
+            if (r is null || r.Pid <= 0) return;
+            if (!_services.Settings.AllowProcessTermination)
+            {
+                MessageBox.Show("请先在设置中开启「允许在程序内结束占用进程」。",
+                    "未启用", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            BeginInvoke(() => CloseSinglePid(r, useForce: false));
+        };
+
+        forceItem.Click += (_, _) =>
+        {
+            var r = GetSelectedScanResult();
+            if (r is null || r.Pid <= 0) return;
+            if (!_services.Settings.AllowProcessTermination || !_services.Settings.EnableForceTerminate)
+            {
+                MessageBox.Show("请先在设置中开启「允许在程序内结束占用进程」并启用「强制结束」选项。",
+                    "未启用", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            BeginInvoke(() => CloseSinglePid(r, useForce: true));
+        };
+
+        copyItem.Click += (_, _) =>
+        {
+            var r = GetSelectedScanResult();
+            if (r is null) return;
+            try { Clipboard.SetText(r.ExecutablePath ?? string.Empty); } catch { }
+        };
+
+        // 打开菜单时根据当前选中行动态调整 enabled
+        menu.Opening += (_, e) =>
+        {
+            var r = GetSelectedScanResult();
+            if (r is null)
+            {
+                e.Cancel = true; // 没选中就不弹菜单
+                return;
+            }
+
+            bool isCritical = r.RiskTier == ProcessRiskTier.Critical;
+            bool hasPid = r.Pid > 0;
+            bool hasExe = !string.IsNullOrEmpty(r.ExecutablePath) && !r.ExecutablePath.StartsWith('[');
+
+            revealItem.Enabled = hasPid && hasExe;
+            gracefulItem.Enabled = hasPid && !isCritical;
+            forceItem.Enabled = hasPid && !isCritical;
+
+            if (isCritical)
+            {
+                gracefulItem.ToolTipText = "系统关键进程不可关闭";
+                forceItem.ToolTipText = "系统关键进程不可关闭";
+            }
+            else
+            {
+                gracefulItem.ToolTipText = string.Empty;
+                forceItem.ToolTipText = string.Empty;
+            }
+        };
+
+        _resultListView.ContextMenuStrip = menu;
+    }
+
+    private HandleScanResult? GetSelectedScanResult()
+    {
+        if (_resultListView.SelectedItems.Count == 0) return null;
+        return _resultListView.SelectedItems[0].Tag as HandleScanResult;
+    }
+
+    /// <summary>
+    /// 单个 PID 的关闭流程（从右键菜单触发）。force=true 走 ConfirmTerminateDialog；
+    /// force=false 走 WM_CLOSE。完成后只更新状态栏，不自动 rescan。
+    /// </summary>
+    private async void CloseSinglePid(HandleScanResult r, bool useForce)
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            _logger.LogDebug("CloseSinglePid 正在执行，忽略重入。");
+            return;
+        }
+
+        try
+        {
+            SetActionButtonsEnabled(false);
+            string drive = _deviceListView.SelectedItems.Count > 0
+                ? _deviceListView.SelectedItems[0].SubItems[0].Text : string.Empty;
+
+            if (useForce)
+            {
+                using var conf = new ConfirmTerminateDialog(
+                    r.Pid, r.ProcessName, r.ExecutablePath, r.FilePath, r.RiskTier);
+                conf.ShowDialog(this);
+                if (!conf.Confirmed)
+                {
+                    SetStatus($"已取消强制结束 {r.ProcessName} ({r.Pid})。");
+                    _services.ActionAuditLog.Append(new AuditEntry
+                    {
+                        Action = "force-terminate", Pid = r.Pid, Name = r.ProcessName,
+                        Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                        Method = "Refused-NoConsent", Success = false, Reason = "用户取消",
+                        Consent = conf.ConsentKind
+                    });
+                    return;
+                }
+
+                SetStatus($"正在强制结束 {r.ProcessName} ({r.Pid})…");
+                var result = await Task.Run(() => _services.ProcessTerminator.ForceTerminate(r.Pid));
+                _services.ActionAuditLog.Append(new AuditEntry
+                {
+                    Action = "force-terminate", Pid = result.Pid, Name = result.ProcessName,
+                    Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                    Method = result.Method, Success = result.Success, Reason = result.Reason,
+                    DurationMs = (long)result.Duration.TotalMilliseconds,
+                    Consent = conf.ConsentKind
+                });
+                SetStatus(result.Success
+                    ? $"强制结束成功：{result.ProcessName} ({result.Pid})"
+                    : $"强制结束失败：{result.Reason}");
+            }
+            else
+            {
+                var timeout = TimeSpan.FromSeconds(_services.Settings.GracefulCloseTimeoutSeconds);
+                SetStatus($"正在优雅关闭 {r.ProcessName} ({r.Pid})…");
+                var result = await Task.Run(() => _services.ProcessTerminator.TryCloseGracefully(r.Pid, timeout));
+                _services.ActionAuditLog.Append(new AuditEntry
+                {
+                    Action = "close-graceful", Pid = result.Pid, Name = result.ProcessName,
+                    Exe = r.ExecutablePath, Drive = drive, FilePath = r.FilePath,
+                    Method = result.Method, Success = result.Success, Reason = result.Reason,
+                    DurationMs = (long)result.Duration.TotalMilliseconds,
+                    Consent = "checkbox-graceful"
+                });
+                SetStatus(result.Success
+                    ? $"优雅关闭成功：{result.ProcessName} ({result.Pid})"
+                    : $"优雅关闭：{result.Method} - {result.Reason}");
+            }
+        }
+        finally
+        {
+            SetActionButtonsEnabled(true);
+            System.Threading.Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    /// <summary>
+    /// 强制弹出流程：弹 2s 倒计时风险确认 → ForceEjectService → 成功/失败提示。
+    /// </summary>
+    private async void OnForceEject(string drive)
+    {
+        if (System.Threading.Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            _logger.LogDebug("OnForceEject 正在执行，忽略重入。");
+            return;
+        }
+
+        try
+        {
+            using var dlg = new ForceEjectConfirmDialog(drive);
+            dlg.ShowDialog(this);
+            if (!dlg.Confirmed)
+            {
+                SetStatus("已取消强制弹出。");
+                _services.ActionAuditLog.Append(new AuditEntry
+                {
+                    Action = "force-eject", Drive = drive, Method = "Refused-NoConsent",
+                    Success = false, Reason = "用户在 2s 倒计时确认对话框点取消",
+                    Consent = "declined"
+                });
+                return;
+            }
+
+            SetStatus($"正在强制弹出 {drive}…");
+            SetActionButtonsEnabled(false);
+
+            var fe = await Task.Run(() => _services.ForceEjectService.ForceEject(drive));
+
+            _services.ActionAuditLog.Append(new AuditEntry
+            {
+                Action = "force-eject", Drive = drive, Method = fe.Stage,
+                Success = fe.Success, Reason = fe.Reason,
+                DurationMs = (long)fe.Duration.TotalMilliseconds,
+                Consent = "force-eject-2s-confirm"
+            });
+
+            if (fe.Success)
+            {
+                SetStatus($"强制弹出成功：{drive}");
+                MessageBox.Show($"已强制弹出 {drive}。\n\n{fe.Reason}",
+                    "强制弹出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                _services.DeviceWatcher.RefreshDevices();
+            }
+            else
+            {
+                SetStatus($"强制弹出失败：卡在 {fe.Stage}");
+                MessageBox.Show($"强制弹出未能完成。\n\n阶段：{fe.Stage}\n{fe.Reason}",
+                    "强制弹出失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        finally
+        {
+            SetActionButtonsEnabled(true);
+            System.Threading.Interlocked.Exchange(ref _busy, 0);
         }
     }
 

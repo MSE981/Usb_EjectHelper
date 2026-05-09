@@ -61,4 +61,18 @@ internal static partial class NativeMethods
         ref uint pnProcInfo,
         IntPtr rgAffectedApps,
         ref uint lpdwRebootReasons);
+
+    /// <summary>RmShutdown 行为标志位。</summary>
+    public const uint RmForceShutdown = 0x1;
+    public const uint RmShutdownOnlyRegistered = 0x10;
+
+    /// <summary>
+    /// 让 RM session 内已注册的应用执行关闭。lpWriteStatus 传 IntPtr.Zero 即不要进度回调。
+    /// 默认行为是请求应用优雅退出（受 RmShutdownOnlyRegistered 影响）；强制行为加 RmForceShutdown。
+    /// </summary>
+    [DllImport(Rstrtmgr, CharSet = CharSet.Unicode)]
+    public static extern int RmShutdown(
+        uint dwSessionHandle,
+        uint lActionFlags,
+        IntPtr fnStatus);
 }

@@ -18,6 +18,9 @@ internal sealed class ServiceComposer : IDisposable
     public IProcessInspector ProcessInspector { get; }
     public IHandleScanner HandleScanner { get; }
     public IExportService ExportService { get; }
+    public IProcessTerminator ProcessTerminator { get; }
+    public IForceEjectService ForceEjectService { get; }
+    public IActionAuditLog ActionAuditLog { get; }
     public AppSettings Settings { get; }
     public StartupManager StartupManager { get; }
 
@@ -32,6 +35,9 @@ internal sealed class ServiceComposer : IDisposable
         IProcessInspector processInspector,
         IHandleScanner handleScanner,
         IExportService exportService,
+        IProcessTerminator processTerminator,
+        IForceEjectService forceEjectService,
+        IActionAuditLog actionAuditLog,
         AppSettings settings,
         StartupManager startupManager)
     {
@@ -43,6 +49,9 @@ internal sealed class ServiceComposer : IDisposable
         ProcessInspector = processInspector;
         HandleScanner = handleScanner;
         ExportService = exportService;
+        ProcessTerminator = processTerminator;
+        ForceEjectService = forceEjectService;
+        ActionAuditLog = actionAuditLog;
         Settings = settings;
         StartupManager = startupManager;
     }
@@ -66,6 +75,12 @@ internal sealed class ServiceComposer : IDisposable
             loggerFactory.CreateLogger<HandleScanner>());
         var exportService = new ExportService();
         var settings = AppSettings.Load();
+        var processTerminator = new ProcessTerminator(
+            processInspector, loggerFactory.CreateLogger<ProcessTerminator>());
+        var forceEjectService = new ForceEjectService(
+            loggerFactory.CreateLogger<ForceEjectService>());
+        var actionAuditLog = new ActionAuditLog(
+            settings, loggerFactory.CreateLogger<ActionAuditLog>());
         var startupManager = new StartupManager(loggerFactory.CreateLogger<StartupManager>());
 
         return new ServiceComposer(
@@ -77,6 +92,9 @@ internal sealed class ServiceComposer : IDisposable
             processInspector,
             handleScanner,
             exportService,
+            processTerminator,
+            forceEjectService,
+            actionAuditLog,
             settings,
             startupManager);
     }

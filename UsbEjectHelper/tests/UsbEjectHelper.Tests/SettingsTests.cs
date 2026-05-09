@@ -31,6 +31,14 @@ public class SettingsTests : IDisposable
         Assert.False(settings.EnablePrivacyMode);
         // 默认不启用深度扫描——安全模式优先
         Assert.False(settings.EnableDeepHandleScan);
+        // 阶段 2：默认全部安全
+        Assert.False(settings.AllowProcessTermination);
+        Assert.False(settings.EnableForceTerminate);
+        Assert.False(settings.EnableForceEject);
+        Assert.Equal(5, settings.GracefulCloseTimeoutSeconds);
+        Assert.True(settings.EnableActionAuditLog);
+        Assert.Equal(1, settings.AuditLogMaxSizeMB);
+        Assert.Equal(5, settings.AuditLogMaxFiles);
     }
 
     [Fact]
@@ -42,7 +50,14 @@ public class SettingsTests : IDisposable
             MinimizeToTrayOnStart = false,
             CloseToTray = true,
             EnablePrivacyMode = true,
-            EnableDeepHandleScan = true
+            EnableDeepHandleScan = true,
+            AllowProcessTermination = true,
+            EnableForceTerminate = true,
+            EnableForceEject = true,
+            GracefulCloseTimeoutSeconds = 12,
+            EnableActionAuditLog = false,
+            AuditLogMaxSizeMB = 4,
+            AuditLogMaxFiles = 3
         };
 
         settings.Save();
@@ -55,6 +70,13 @@ public class SettingsTests : IDisposable
         Assert.Equal(settings.CloseToTray, loaded.CloseToTray);
         Assert.Equal(settings.EnablePrivacyMode, loaded.EnablePrivacyMode);
         Assert.Equal(settings.EnableDeepHandleScan, loaded.EnableDeepHandleScan);
+        Assert.Equal(settings.AllowProcessTermination, loaded.AllowProcessTermination);
+        Assert.Equal(settings.EnableForceTerminate, loaded.EnableForceTerminate);
+        Assert.Equal(settings.EnableForceEject, loaded.EnableForceEject);
+        Assert.Equal(settings.GracefulCloseTimeoutSeconds, loaded.GracefulCloseTimeoutSeconds);
+        Assert.Equal(settings.EnableActionAuditLog, loaded.EnableActionAuditLog);
+        Assert.Equal(settings.AuditLogMaxSizeMB, loaded.AuditLogMaxSizeMB);
+        Assert.Equal(settings.AuditLogMaxFiles, loaded.AuditLogMaxFiles);
     }
 
     [Fact]
