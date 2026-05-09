@@ -106,6 +106,8 @@ SQLite 或 JSON 配置: 本地设置、日志和设备历史记录
 
 > 阶段 2 详细落地方案（弹出失败主流程改造 + 四层关闭模型 + 强制弹出 + 审计日志）已写入 [`phase2-development-plan.md`](phase2-development-plan.md)。
 
+**后续开发**：标准分阶段工作流见 [`workflow-usb-eject-helper.md`](workflow-usb-eject-helper.md)；供 Cursor Agent 复用的约定见 [`SKILL-usb-eject-helper.md`](SKILL-usb-eject-helper.md)（可复制到 `.cursor/skills/usb-eject-helper/SKILL.md`）。
+
 ### 阶段 3：体验与覆盖
 
 - 优化系统托盘体验：设备分组、状态图标、弹出成功/失败通知。
